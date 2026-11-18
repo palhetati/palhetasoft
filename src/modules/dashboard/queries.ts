@@ -1,10 +1,29 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server';
-import {
-  computeFinancialSummary,
-  type ExpenseSummaryInput,
-  type FinancialSummaryOutput,
-  type SaleSummaryInput,
-} from './calculations';
+import type { FinancialSummaryOutput } from './calculations';
+
+export function getBrtDateParts(now: Date = new Date()): {
+  todayStr: string;
+  firstOfMonth: string;
+  endOfMonth: string;
+} {
+  const formatter = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Sao_Paulo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  });
+  const todayStr = formatter.format(now); // YYYY-MM-DD in BRT
+  const [yStr, mStr] = todayStr.split('-');
+  const year = Number(yStr);
+  const month = Number(mStr);
+  const lastDay = new Date(year, month, 0).getDate();
+
+  return {
+    todayStr,
+    firstOfMonth: `${yStr}-${mStr}-01`,
+    endOfMonth: `${yStr}-${mStr}-${String(lastDay).padStart(2, '0')}`,
+  };
+}
 
 export async function fetchDashboardData(
   establishmentId: string,
@@ -24,20 +43,13 @@ export async function fetchDashboardData(
 }> {
   const supabase = await createSupabaseServerClient();
 
-  const [{ data: sales }, { data: expenses }, { count: openRegistersCount }, { data: recentSales }] =
+  const [{ data: rpcData, error: rpcErr }, { count: openRegistersCount }, { data: recentSales }] =
     await Promise.all([
-      supabase
-        .from('sales')
-        .select('gross_amount, total_fee_amount, net_amount, status')
-        .eq('establishment_id', establishmentId)
-        .gte('created_at', `${startDate}T00:00:00`)
-        .lte('created_at', `${endDate}T23:59:59`),
-      supabase
-        .from('expenses')
-        .select('amount, expense_type, is_provision, status')
-        .eq('establishment_id', establishmentId)
-        .gte('due_date', startDate)
-        .lte('due_date', endDate),
+      supabase.rpc('get_financial_dashboard', {
+        p_establishment_id: establishmentId,
+        p_start_date: startDate,
+        p_end_date: endDate,
+      }),
       supabase
         .from('cash_registers')
         .select('id', { count: 'exact', head: true })
@@ -51,10 +63,23 @@ export async function fetchDashboardData(
         .limit(8),
     ]);
 
-  const summary = computeFinancialSummary(
-    (sales ?? []) as SaleSummaryInput[],
-    (expenses ?? []) as ExpenseSummaryInput[]
-  );
+  if (rpcErr) {
+    throw new Error(`Falha ao consultar resumo financeiro: ${rpcErr.message}`);
+  }
+
+  const raw = (rpcData ?? {}) as Record<string, number>;
+  const summary: FinancialSummaryOutput = {
+    grossRevenue: Number(raw.gross_revenue ?? 0),
+    totalFees: Number(raw.total_fees ?? 0),
+    netSalesRevenue: Number(raw.net_sales_revenue ?? 0),
+    fixedExpensesPaid: Number(raw.fixed_expenses_paid ?? 0),
+    variableExpensesPaid: Number(raw.variable_expenses_paid ?? 0),
+    realizedNetProfit: Number(raw.realized_net_profit ?? 0),
+    fixedExpensesPending: Number(raw.fixed_expenses_pending ?? 0),
+    variableExpensesPending: Number(raw.variable_expenses_pending ?? 0),
+    projectedNetProfit: Number(raw.projected_net_profit ?? 0),
+    accountingProvisionsTotal: Number(raw.accounting_provisions_total ?? 0),
+  };
 
   return {
     summary,

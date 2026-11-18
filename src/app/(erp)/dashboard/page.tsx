@@ -10,7 +10,7 @@ import {
 } from '@/components/ui';
 import { formatBRL, formatDateBR } from '@/lib/formatters';
 import { getCurrentErpContext } from '@/modules/auth/actions';
-import { fetchDashboardData } from '@/modules/dashboard/queries';
+import { fetchDashboardData, getBrtDateParts } from '@/modules/dashboard/queries';
 
 export default async function DashboardPage({
   searchParams,
@@ -21,13 +21,7 @@ export default async function DashboardPage({
   const params = await searchParams;
   const periodo = params.periodo ?? 'mes';
 
-  const now = new Date();
-  const todayStr = now.toISOString().slice(0, 10);
-  const firstOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const endOfMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(
-    lastDay
-  ).padStart(2, '0')}`;
+  const { todayStr, firstOfMonth, endOfMonth } = getBrtDateParts();
 
   const startDate = periodo === 'hoje' ? todayStr : firstOfMonth;
   const endDate = periodo === 'hoje' ? todayStr : endOfMonth;

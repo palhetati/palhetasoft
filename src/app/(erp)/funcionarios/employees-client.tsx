@@ -200,7 +200,11 @@ export function EmployeesClient({
 
         {/* Live Parameterized CLT Accounting Guide */}
         <div className="lg:col-span-6">
-          {contractType === 'clt' && liveBreakdown && cltParams ? (
+          {contractType === 'clt' && !cltParams ? (
+            <Alert tone="warning" title="Parâmetros tributários CLT não configurados">
+              Cadastre ou valide a chave clt_tributos_vigentes em Administração (parametros_web) para exibir os cálculos automáticos da CLT.
+            </Alert>
+          ) : contractType === 'clt' && liveBreakdown && cltParams ? (
             <Card
               variant="elevated"
               title="Demonstrativo Contábil CLT Parametrizado"

@@ -139,6 +139,25 @@ AS $$
   );
 $$;
 
+CREATE OR REPLACE FUNCTION public.can_manage_establishment(target_establishment_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT public.is_super_admin() OR EXISTS (
+    SELECT 1
+    FROM public.app_users u
+    JOIN public.user_profiles up ON up.user_id = u.id
+    JOIN public.access_profiles ap ON ap.id = up.profile_id
+    WHERE u.id = auth.uid()
+      AND u.is_active = true
+      AND u.establishment_id = target_establishment_id
+      AND ap.can_cancel_sales = true
+  );
+$$;
+
 CREATE OR REPLACE FUNCTION public.get_parametro_web(
   p_chave text,
   p_establishment_id uuid DEFAULT NULL
@@ -153,14 +172,14 @@ AS $$
   FROM public.parametros_web pw
   WHERE pw.chave_parametro = p_chave
     AND (
-      (p_establishment_id IS NOT NULL AND pw.establishment_id = p_establishment_id)
+      (p_establishment_id IS NOT NULL AND pw.establishment_id = p_establishment_id AND public.can_access_establishment(p_establishment_id))
       OR pw.establishment_id IS NULL
     )
   ORDER BY (pw.establishment_id IS NULL) ASC
   LIMIT 1;
 $$;
 
--- RPC: Resolve User Navigation Tree on Login
+-- RPC: Resolve User Navigation Tree on Login (bound strictly to auth.uid())
 CREATE OR REPLACE FUNCTION public.resolve_user_navigation(
   p_user_id uuid,
   p_active_establishment_id uuid DEFAULT NULL
@@ -184,11 +203,16 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_caller uuid := auth.uid();
   v_is_super boolean := false;
   v_user_est uuid := NULL;
   v_effective_est uuid := NULL;
   v_can_cancel boolean := false;
 BEGIN
+  IF v_caller IS NULL OR (v_caller <> p_user_id AND NOT public.is_super_admin()) THEN
+    RAISE EXCEPTION 'Acesso negado ao carregar árvore de navegação.';
+  END IF;
+
   SELECT u.is_super_admin, u.establishment_id
     INTO v_is_super, v_user_est
     FROM public.app_users u
@@ -287,7 +311,7 @@ ALTER TABLE public.access_profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.profile_modules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_profiles ENABLE ROW LEVEL SECURITY;
 
--- Policies
+-- Hardened Policies (Preventing non-super-admin privilege escalation)
 CREATE POLICY establishments_select_policy ON public.establishments
   FOR SELECT TO authenticated
   USING (public.can_access_establishment(id));
@@ -303,8 +327,18 @@ CREATE POLICY app_users_select_policy ON public.app_users
 
 CREATE POLICY app_users_write_policy ON public.app_users
   FOR ALL TO authenticated
-  USING (public.is_super_admin() OR public.can_access_establishment(establishment_id))
-  WITH CHECK (public.is_super_admin() OR public.can_access_establishment(establishment_id));
+  USING (
+    public.is_super_admin()
+    OR (establishment_id IS NOT NULL AND public.can_manage_establishment(establishment_id))
+  )
+  WITH CHECK (
+    public.is_super_admin()
+    OR (
+      is_super_admin = false
+      AND establishment_id IS NOT NULL
+      AND public.can_manage_establishment(establishment_id)
+    )
+  );
 
 CREATE POLICY system_modules_select_policy ON public.system_modules
   FOR SELECT TO authenticated
@@ -321,8 +355,8 @@ CREATE POLICY parametros_web_select_policy ON public.parametros_web
 
 CREATE POLICY parametros_web_write_policy ON public.parametros_web
   FOR ALL TO authenticated
-  USING (public.is_super_admin() OR (establishment_id IS NOT NULL AND public.can_access_establishment(establishment_id)))
-  WITH CHECK (public.is_super_admin() OR (establishment_id IS NOT NULL AND public.can_access_establishment(establishment_id)));
+  USING (public.is_super_admin())
+  WITH CHECK (public.is_super_admin());
 
 CREATE POLICY establishment_modules_select_policy ON public.establishment_modules
   FOR SELECT TO authenticated
@@ -339,12 +373,25 @@ CREATE POLICY access_profiles_select_policy ON public.access_profiles
 
 CREATE POLICY access_profiles_write_policy ON public.access_profiles
   FOR ALL TO authenticated
-  USING (public.is_super_admin() OR (establishment_id IS NOT NULL AND public.can_access_establishment(establishment_id)))
-  WITH CHECK (public.is_super_admin() OR (establishment_id IS NOT NULL AND public.can_access_establishment(establishment_id)));
+  USING (
+    public.is_super_admin()
+    OR (establishment_id IS NOT NULL AND public.can_manage_establishment(establishment_id))
+  )
+  WITH CHECK (
+    public.is_super_admin()
+    OR (establishment_id IS NOT NULL AND public.can_manage_establishment(establishment_id))
+  );
 
 CREATE POLICY profile_modules_select_policy ON public.profile_modules
   FOR SELECT TO authenticated
-  USING (true);
+  USING (
+    public.is_super_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.access_profiles ap
+       WHERE ap.id = profile_id
+         AND (ap.establishment_id IS NULL OR public.can_access_establishment(ap.establishment_id))
+    )
+  );
 
 CREATE POLICY profile_modules_write_policy ON public.profile_modules
   FOR ALL TO authenticated
@@ -354,7 +401,16 @@ CREATE POLICY profile_modules_write_policy ON public.profile_modules
       SELECT 1 FROM public.access_profiles ap
        WHERE ap.id = profile_id
          AND ap.establishment_id IS NOT NULL
-         AND public.can_access_establishment(ap.establishment_id)
+         AND public.can_manage_establishment(ap.establishment_id)
+    )
+  )
+  WITH CHECK (
+    public.is_super_admin()
+    OR EXISTS (
+      SELECT 1 FROM public.access_profiles ap
+       WHERE ap.id = profile_id
+         AND ap.establishment_id IS NOT NULL
+         AND public.can_manage_establishment(ap.establishment_id)
     )
   );
 
@@ -375,6 +431,20 @@ CREATE POLICY user_profiles_write_policy ON public.user_profiles
     public.is_super_admin()
     OR EXISTS (
       SELECT 1 FROM public.app_users u
-       WHERE u.id = user_id AND public.can_access_establishment(u.establishment_id)
+       WHERE u.id = user_id
+         AND u.establishment_id IS NOT NULL
+         AND public.can_manage_establishment(u.establishment_id)
+    )
+  )
+  WITH CHECK (
+    public.is_super_admin()
+    OR EXISTS (
+      SELECT 1
+      FROM public.app_users u
+      JOIN public.access_profiles ap ON ap.id = profile_id
+      WHERE u.id = user_id
+        AND u.establishment_id IS NOT NULL
+        AND ap.establishment_id = u.establishment_id
+        AND public.can_manage_establishment(u.establishment_id)
     )
   );

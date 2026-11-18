@@ -7,8 +7,8 @@ import { flattenNavigationTreeFromRows } from './navigation-tree';
 import {
   NAV_SESSION_COOKIE,
   extractAllowedPaths,
-  findModuleHelpByPath,
   parseNavigationSession,
+  resolveHomeRoute,
   serializeNavigationSession,
 } from './session-nav';
 import type { SessionNavSnapshot } from './types';
@@ -102,6 +102,7 @@ async function buildAndStoreNavSnapshot(
   cookieStore.set(NAV_SESSION_COOKIE, serializeNavigationSession(snapshot), {
     httpOnly: true,
     sameSite: 'lax',
+    secure: process.env.NODE_ENV === 'production',
     path: '/',
     maxAge: 60 * 60 * 12,
   });
@@ -124,16 +125,19 @@ export async function signInAction(formData: FormData) {
     return { error: 'Credenciais inválidas. Verifique seu e-mail e senha.' };
   }
 
+  let firstRoute = '/dashboard';
   try {
     const snapshot = await buildAndStoreNavSnapshot(data.user.id);
-    const firstRoute = snapshot.allowedPaths[0] ?? (snapshot.isSuperAdmin ? '/admin' : '/dashboard');
-    redirect(firstRoute);
+    firstRoute = resolveHomeRoute(snapshot);
   } catch (err) {
+    const cookieStore = await cookies();
+    cookieStore.delete(NAV_SESSION_COOKIE);
     await supabase.auth.signOut();
     return {
       error: err instanceof Error ? err.message : 'Erro ao montar o menu do usuário.',
     };
   }
+  redirect(firstRoute);
 }
 
 export async function signOutAction() {
@@ -145,22 +149,49 @@ export async function signOutAction() {
 }
 
 export async function switchSuperAdminTenantAction(establishmentId: string) {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   const cookieStore = await cookies();
   const current = parseNavigationSession(cookieStore.get(NAV_SESSION_COOKIE)?.value);
-  if (!current || !current.isSuperAdmin) {
-    throw new Error('Apenas o Super Admin pode alternar de empresa.');
+
+  if (!user || !current || current.userId !== user.id || !current.isSuperAdmin) {
+    throw new Error('Apenas o Super Admin autenticado pode alternar de empresa.');
   }
-  await buildAndStoreNavSnapshot(current.userId, establishmentId);
+  await buildAndStoreNavSnapshot(user.id, establishmentId);
 }
 
 export async function getCurrentErpContext(pathname?: string) {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   const cookieStore = await cookies();
   const snapshot = parseNavigationSession(cookieStore.get(NAV_SESSION_COOKIE)?.value);
-  if (!snapshot) {
+
+  if (!user || !snapshot || snapshot.userId !== user.id) {
     redirect('/login');
   }
 
-  const moduleHelp = pathname ? findModuleHelpByPath(snapshot.tree, pathname) : null;
+  let moduleHelp: { label: string; helpTitle: string; helpText: string } | null = null;
+  if (pathname) {
+    const { data: modRow } = await supabase
+      .from('system_modules')
+      .select('label, help_title, help_text')
+      .eq('route_path', pathname)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (modRow) {
+      moduleHelp = {
+        label: modRow.label,
+        helpTitle: modRow.help_title,
+        helpText: modRow.help_text,
+      };
+    }
+  }
+
   return {
     session: snapshot,
     moduleHelp,

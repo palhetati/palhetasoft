@@ -91,6 +91,17 @@ export async function recordDrawerMovementAction(formData: FormData) {
   }
 
   const supabase = await createSupabaseServerClient();
+  const { data: openReg } = await supabase
+    .from('cash_registers')
+    .select('id, status')
+    .eq('id', cashRegisterId)
+    .eq('establishment_id', session.activeEstablishmentId)
+    .single();
+
+  if (!openReg || openReg.status !== 'open') {
+    return { error: 'O caixa informado não está aberto neste estabelecimento.' };
+  }
+
   const { error } = await supabase.from('cash_movements').insert({
     establishment_id: session.activeEstablishmentId,
     cash_register_id: cashRegisterId,

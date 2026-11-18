@@ -4,7 +4,18 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { createSupabaseAdminClient } from '@/lib/supabase/admin';
 import { getCurrentErpContext } from '@/modules/auth/actions';
-import { validateModuleHelpPayload } from '@/modules/parametros/service';
+import { isRouteAllowed } from '@/modules/auth/session-nav';
+import type { SessionNavSnapshot } from '@/modules/auth/types';
+import {
+  validateCltParametroJson,
+  validateModuleHelpPayload,
+} from '@/modules/parametros/service';
+
+function assertAdminOrManagerAccess(session: SessionNavSnapshot): string | null {
+  if (session.isSuperAdmin) return null;
+  if (session.canCancelSales && isRouteAllowed(session, '/admin')) return null;
+  return 'Acesso restrito a administradores autorizados.';
+}
 
 export async function createEstablishmentAction(formData: FormData) {
   const { session } = await getCurrentErpContext();
@@ -44,13 +55,24 @@ export async function createEstablishmentAction(formData: FormData) {
   }
 
   if (moduleIds.length > 0) {
-    await supabase.from('establishment_modules').insert(
+    const { error: modErr } = await supabase.from('establishment_modules').insert(
       moduleIds.map((moduleId) => ({
         establishment_id: est.id,
         module_id: moduleId,
       }))
     );
+    if (modErr) return { error: modErr.message };
   }
+
+  // Seed default payment methods so /pdv works immediately on the new establishment
+  const { error: pmErr } = await supabase.from('payment_method_configs').insert([
+    { establishment_id: est.id, code: 'cash', label: 'Dinheiro em Espécie', settlement_mode: 'manual_pos', fee_percent: 0, fixed_fee_amount: 0, is_active: true },
+    { establishment_id: est.id, code: 'pix', label: 'PIX', settlement_mode: 'manual_pos', fee_percent: 0, fixed_fee_amount: 0, is_active: true },
+    { establishment_id: est.id, code: 'debit_card', label: 'Cartão de Débito', settlement_mode: 'manual_pos', fee_percent: 1.39, fixed_fee_amount: 0, is_active: true },
+    { establishment_id: est.id, code: 'credit_card', label: 'Cartão de Crédito', settlement_mode: 'manual_pos', fee_percent: 3.19, fixed_fee_amount: 0, is_active: true },
+    { establishment_id: est.id, code: 'customer_credit', label: 'Crédito Pré-Pago do Cliente', settlement_mode: 'manual_pos', fee_percent: 0, fixed_fee_amount: 0, is_active: false },
+  ]);
+  if (pmErr) return { error: pmErr.message };
 
   revalidatePath('/admin');
   return { success: true };
@@ -101,6 +123,13 @@ export async function upsertSystemModuleAction(formData: FormData) {
 
 export async function createAccessProfileAction(formData: FormData) {
   const { session } = await getCurrentErpContext();
+  const authError = assertAdminOrManagerAccess(session);
+  if (authError) return { error: authError };
+
+  if (!session.activeEstablishmentId) {
+    return { error: 'Selecione uma empresa ativa para vincular o perfil.' };
+  }
+
   const name = String(formData.get('name') ?? '').trim();
   const description = String(formData.get('description') ?? '').trim();
   const canCancelSales = formData.get('can_cancel_sales') === 'true';
@@ -126,12 +155,13 @@ export async function createAccessProfileAction(formData: FormData) {
     return { error: error?.message ?? 'Erro ao salvar perfil.' };
   }
 
-  await supabase.from('profile_modules').insert(
+  const { error: pmError } = await supabase.from('profile_modules').insert(
     moduleIds.map((moduleId) => ({
       profile_id: profile.id,
       module_id: moduleId,
     }))
   );
+  if (pmError) return { error: pmError.message };
 
   revalidatePath('/admin');
   return { success: true };
@@ -139,10 +169,16 @@ export async function createAccessProfileAction(formData: FormData) {
 
 export async function createClosedUserAction(formData: FormData) {
   const { session } = await getCurrentErpContext();
+  const authError = assertAdminOrManagerAccess(session);
+  if (authError) return { error: authError };
+
   const fullName = String(formData.get('full_name') ?? '').trim();
   const email = String(formData.get('email') ?? '').trim().toLowerCase();
   const password = String(formData.get('password') ?? '');
-  const establishmentId = String(formData.get('establishment_id') ?? session.activeEstablishmentId ?? '');
+  const requestedEstId = String(formData.get('establishment_id') ?? '');
+  const establishmentId = session.isSuperAdmin
+    ? requestedEstId || session.activeEstablishmentId || ''
+    : session.activeEstablishmentId || '';
   const profileIds = formData.getAll('profile_ids').map(String).filter(Boolean);
 
   if (!fullName || !email || password.length < 6 || !establishmentId) {
@@ -150,6 +186,18 @@ export async function createClosedUserAction(formData: FormData) {
   }
 
   const adminClient = createSupabaseAdminClient();
+
+  if (profileIds.length > 0) {
+    const { data: validProfiles } = await adminClient
+      .from('access_profiles')
+      .select('id')
+      .eq('establishment_id', establishmentId)
+      .in('id', profileIds);
+    if ((validProfiles ?? []).length !== profileIds.length) {
+      return { error: 'Um ou mais perfis informados não pertencem a esta empresa.' };
+    }
+  }
+
   const { data: created, error: authErr } = await adminClient.auth.admin.createUser({
     email,
     password,
@@ -170,15 +218,19 @@ export async function createClosedUserAction(formData: FormData) {
     is_active: true,
   });
 
-  if (appErr) return { error: appErr.message };
+  if (appErr) {
+    await adminClient.auth.admin.deleteUser(created.user.id);
+    return { error: appErr.message };
+  }
 
   if (profileIds.length > 0) {
-    await adminClient.from('user_profiles').insert(
+    const { error: upErr } = await adminClient.from('user_profiles').insert(
       profileIds.map((profileId) => ({
         user_id: created.user.id,
         profile_id: profileId,
       }))
     );
+    if (upErr) return { error: upErr.message };
   }
 
   revalidatePath('/admin');
@@ -195,19 +247,28 @@ export async function upsertParametroWebAction(formData: FormData) {
   const valor = String(formData.get('valor_parametro') ?? '').trim();
   const descricao = String(formData.get('descricao') ?? '').trim();
   const scope = String(formData.get('scope') ?? 'global');
+
+  if (scope === 'tenant' && !session.activeEstablishmentId) {
+    return { error: 'Selecione uma empresa ativa antes de salvar um parâmetro específico de empresa.' };
+  }
+
   const establishmentId = scope === 'tenant' ? session.activeEstablishmentId : null;
 
   if (!chave || !valor) {
     return { error: 'Informe a chave e o valor do parâmetro.' };
   }
 
-  const supabase = await createSupabaseServerClient();
-  let query = supabase
-    .from('parametros_web')
-    .select('id')
-    .eq('chave_parametro', chave);
+  if (chave === 'clt_tributos_vigentes') {
+    const check = validateCltParametroJson(valor);
+    if (!check.valid) return { error: check.reason };
+  }
 
-  query = establishmentId ? query.eq('establishment_id', establishmentId) : query.is('establishment_id', null);
+  const supabase = await createSupabaseServerClient();
+  let query = supabase.from('parametros_web').select('id').eq('chave_parametro', chave);
+
+  query = establishmentId
+    ? query.eq('establishment_id', establishmentId)
+    : query.is('establishment_id', null);
   const { data: existing } = await query.maybeSingle();
 
   if (existing?.id) {

@@ -149,6 +149,20 @@ export async function launchDiaristaPaymentAction(formData: FormData) {
   const today = new Date().toISOString().slice(0, 10);
   const supabase = await createSupabaseServerClient();
 
+  if (payNow && cashRegisterId) {
+    const { data: validReg } = await supabase
+      .from('cash_registers')
+      .select('id')
+      .eq('id', cashRegisterId)
+      .eq('establishment_id', session.activeEstablishmentId)
+      .eq('status', 'open')
+      .maybeSingle();
+
+    if (!validReg) {
+      return { error: 'O caixa selecionado não está aberto para pagamento de diária em espécie.' };
+    }
+  }
+
   const { data: exp, error } = await supabase
     .from('expenses')
     .insert({

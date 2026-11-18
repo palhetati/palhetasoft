@@ -1,5 +1,11 @@
+import { createServerClient } from '@supabase/ssr';
 import { NextResponse, type NextRequest } from 'next/server';
-import { NAV_SESSION_COOKIE, isRouteAllowed, parseNavigationSession } from '@/modules/auth/session-nav';
+import {
+  NAV_SESSION_COOKIE,
+  isRouteAllowed,
+  parseNavigationSession,
+  resolveHomeRoute,
+} from '@/modules/auth/session-nav';
 
 const PUBLIC_PATHS = ['/login'];
 
@@ -14,30 +20,69 @@ export async function updateSessionAndGuardRoutes(request: NextRequest) {
     return NextResponse.next();
   }
 
+  let supabaseResponse = NextResponse.next({ request });
+
+  const supabase = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? 'http://127.0.0.1:54321',
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? 'local-anon-key-placeholder',
+    {
+      cookies: {
+        getAll() {
+          return request.cookies.getAll();
+        },
+        setAll(
+          cookiesToSet: Array<{
+            name: string;
+            value: string;
+            options?: Record<string, unknown>;
+          }>
+        ) {
+          cookiesToSet.forEach(({ name, value }) => request.cookies.set(name, value));
+          supabaseResponse = NextResponse.next({ request });
+          cookiesToSet.forEach(({ name, value, options }) =>
+            supabaseResponse.cookies.set(
+              name,
+              value,
+              options as Parameters<typeof supabaseResponse.cookies.set>[2]
+            )
+          );
+        },
+      },
+    }
+  );
+
+  // Refresh Supabase JWT when needed and verify active user
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
   const rawNavCookie = request.cookies.get(NAV_SESSION_COOKIE)?.value;
   const snapshot = parseNavigationSession(rawNavCookie);
+  const validSession = user && snapshot && snapshot.userId === user.id ? snapshot : null;
 
   if (PUBLIC_PATHS.includes(pathname)) {
-    if (snapshot) {
-      const target = snapshot.allowedPaths[0] ?? (snapshot.isSuperAdmin ? '/admin' : '/dashboard');
-      return NextResponse.redirect(new URL(target, request.url));
+    if (validSession) {
+      return NextResponse.redirect(new URL(resolveHomeRoute(validSession), request.url));
     }
-    return NextResponse.next();
+    if (rawNavCookie && !validSession) {
+      supabaseResponse.cookies.delete(NAV_SESSION_COOKIE);
+    }
+    return supabaseResponse;
   }
 
-  if (!snapshot) {
-    return NextResponse.redirect(new URL('/login', request.url));
+  if (!validSession) {
+    const redirectRes = NextResponse.redirect(new URL('/login', request.url));
+    redirectRes.cookies.delete(NAV_SESSION_COOKIE);
+    return redirectRes;
   }
 
   if (pathname === '/') {
-    const firstAllowed = snapshot.allowedPaths[0] ?? (snapshot.isSuperAdmin ? '/admin' : '/dashboard');
-    return NextResponse.redirect(new URL(firstAllowed, request.url));
+    return NextResponse.redirect(new URL(resolveHomeRoute(validSession), request.url));
   }
 
-  if (!isRouteAllowed(snapshot, pathname)) {
-    const fallback = snapshot.allowedPaths[0] ?? '/login';
-    return NextResponse.redirect(new URL(fallback, request.url));
+  if (!isRouteAllowed(validSession, pathname)) {
+    return NextResponse.redirect(new URL(resolveHomeRoute(validSession), request.url));
   }
 
-  return NextResponse.next();
+  return supabaseResponse;
 }

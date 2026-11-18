@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS public.sales (
   customer_name text,
   subtotal_amount numeric(12,2) NOT NULL CHECK (subtotal_amount >= 0),
   discount_amount numeric(12,2) NOT NULL DEFAULT 0 CHECK (discount_amount >= 0),
-  gross_amount numeric(12,2) NOT NULL CHECK (gross_amount >= 0),
+  gross_amount numeric(12,2) NOT NULL CHECK (gross_amount > 0),
   total_fee_amount numeric(12,2) NOT NULL DEFAULT 0 CHECK (total_fee_amount >= 0),
   net_amount numeric(12,2) NOT NULL,
   status text NOT NULL DEFAULT 'completed'
@@ -244,10 +244,10 @@ BEGIN
 END $$;
 
 -- ============================================================================
--- ATOMIC TRANSACTIONAL RPCs
+-- ATOMIC TRANSACTIONAL RPCs (Bound strictly to auth.uid())
 -- ============================================================================
 
--- 1. COMPLETE PDV SALE (Itens + Pagamento Dividido + Estoque + Caixa)
+-- 1. COMPLETE PDV SALE (Validação Server-Side de Produtos/Taxas + Pagamento Dividido + Caixa)
 CREATE OR REPLACE FUNCTION public.complete_pdv_sale(
   p_establishment_id uuid,
   p_cash_register_id uuid,
@@ -264,6 +264,7 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_caller_id uuid := auth.uid();
   v_reg_status text;
   v_allow_neg boolean;
   v_subtotal numeric(12,2) := 0;
@@ -274,10 +275,22 @@ DECLARE
   v_item jsonb;
   v_pay jsonb;
   v_prod record;
+  v_cfg record;
+  v_qty numeric(12,3);
+  v_pay_gross numeric(12,2);
+  v_pay_fee numeric(12,2);
   v_payment_id uuid;
 BEGIN
-  IF NOT public.can_access_establishment(p_establishment_id) THEN
+  IF v_caller_id IS NULL OR NOT public.can_access_establishment(p_establishment_id) THEN
     RAISE EXCEPTION 'Acesso negado ao estabelecimento informado.';
+  END IF;
+
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'Adicione pelo menos um item válido para concluir a venda.';
+  END IF;
+
+  IF p_payments IS NULL OR jsonb_typeof(p_payments) <> 'array' OR jsonb_array_length(p_payments) = 0 THEN
+    RAISE EXCEPTION 'Informe pelo menos uma forma de pagamento.';
   END IF;
 
   SELECT cr.status, e.allow_negative_stock
@@ -292,20 +305,53 @@ BEGIN
     RAISE EXCEPTION 'O caixa selecionado não está aberto para registrar vendas.';
   END IF;
 
+  -- Compute authoritative subtotal directly from products owned by the establishment
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
   LOOP
-    v_subtotal := v_subtotal + ROUND(((v_item->>'quantity')::numeric * (v_item->>'unit_price')::numeric), 2);
+    v_qty := (v_item->>'quantity')::numeric;
+    IF v_qty IS NULL OR v_qty <= 0 THEN
+      RAISE EXCEPTION 'Quantidade inválida informada em item da venda.';
+    END IF;
+
+    SELECT * INTO v_prod
+      FROM public.products
+     WHERE id = (v_item->>'product_id')::uuid
+       AND establishment_id = p_establishment_id
+       AND is_active = true;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Produto inválido ou não pertencente ao estabelecimento.';
+    END IF;
+
+    v_subtotal := v_subtotal + ROUND(v_qty * v_prod.unit_price, 2);
   END LOOP;
 
   v_gross := ROUND(v_subtotal - COALESCE(p_discount_amount, 0), 2);
-  IF v_gross < 0 THEN
-    RAISE EXCEPTION 'O desconto não pode superar o subtotal da venda.';
+  IF v_gross <= 0 THEN
+    RAISE EXCEPTION 'O total da venda deve ser maior que zero.';
   END IF;
 
+  -- Validate split payments & compute authoritative fees from payment_method_configs
   FOR v_pay IN SELECT * FROM jsonb_array_elements(p_payments)
   LOOP
-    v_payments_sum := v_payments_sum + ROUND((v_pay->>'gross_amount')::numeric, 2);
-    v_total_fees := v_total_fees + ROUND(COALESCE((v_pay->>'fee_amount')::numeric, 0), 2);
+    v_pay_gross := ROUND((v_pay->>'gross_amount')::numeric, 2);
+    IF v_pay_gross IS NULL OR v_pay_gross <= 0 THEN
+      RAISE EXCEPTION 'Cada parcela de pagamento dividido deve ter valor maior que zero.';
+    END IF;
+
+    SELECT * INTO v_cfg
+      FROM public.payment_method_configs
+     WHERE establishment_id = p_establishment_id
+       AND code = (v_pay->>'payment_method')
+       AND is_active = true;
+
+    v_pay_fee := CASE
+      WHEN FOUND THEN ROUND((v_pay_gross * v_cfg.fee_percent) / 100.0 + v_cfg.fixed_fee_amount, 2)
+      ELSE ROUND(COALESCE((v_pay->>'fee_amount')::numeric, 0), 2)
+    END;
+
+    v_payments_sum := v_payments_sum + v_pay_gross;
+    v_total_fees := v_total_fees + v_pay_fee;
   END LOOP;
 
   IF v_payments_sum <> v_gross THEN
@@ -317,25 +363,27 @@ BEGIN
     customer_name, subtotal_amount, discount_amount, gross_amount,
     total_fee_amount, net_amount, status
   ) VALUES (
-    p_establishment_id, p_cash_register_id, p_created_by, COALESCE(p_origin_module, 'pdv'),
+    p_establishment_id, p_cash_register_id, v_caller_id, COALESCE(p_origin_module, 'pdv'),
     p_customer_name, v_subtotal, COALESCE(p_discount_amount, 0), v_gross,
     v_total_fees, ROUND(v_gross - v_total_fees, 2), 'completed'
   ) RETURNING id INTO v_sale_id;
 
   FOR v_item IN SELECT * FROM jsonb_array_elements(p_items)
   LOOP
+    v_qty := (v_item->>'quantity')::numeric;
+
     SELECT * INTO v_prod
       FROM public.products
      WHERE id = (v_item->>'product_id')::uuid
        AND establishment_id = p_establishment_id
      FOR UPDATE;
 
-    IF FOUND AND v_prod.track_stock THEN
-      IF NOT v_allow_neg AND (v_prod.stock_quantity - (v_item->>'quantity')::numeric) < 0 THEN
+    IF v_prod.track_stock THEN
+      IF NOT v_allow_neg AND (v_prod.stock_quantity - v_qty) < 0 THEN
         RAISE EXCEPTION 'Estoque insuficiente para o produto %.', v_prod.name;
       END IF;
       UPDATE public.products
-         SET stock_quantity = stock_quantity - (v_item->>'quantity')::numeric
+         SET stock_quantity = stock_quantity - v_qty
        WHERE id = v_prod.id;
     END IF;
 
@@ -344,16 +392,29 @@ BEGIN
       quantity, unit_price, total_price
     ) VALUES (
       p_establishment_id, v_sale_id,
-      NULLIF(v_item->>'product_id', '')::uuid,
-      v_item->>'product_name',
-      (v_item->>'quantity')::numeric,
-      (v_item->>'unit_price')::numeric,
-      ROUND(((v_item->>'quantity')::numeric * (v_item->>'unit_price')::numeric), 2)
+      v_prod.id,
+      v_prod.name,
+      v_qty,
+      v_prod.unit_price,
+      ROUND(v_qty * v_prod.unit_price, 2)
     );
   END LOOP;
 
   FOR v_pay IN SELECT * FROM jsonb_array_elements(p_payments)
   LOOP
+    v_pay_gross := ROUND((v_pay->>'gross_amount')::numeric, 2);
+
+    SELECT * INTO v_cfg
+      FROM public.payment_method_configs
+     WHERE establishment_id = p_establishment_id
+       AND code = (v_pay->>'payment_method')
+       AND is_active = true;
+
+    v_pay_fee := CASE
+      WHEN FOUND THEN ROUND((v_pay_gross * v_cfg.fee_percent) / 100.0 + v_cfg.fixed_fee_amount, 2)
+      ELSE ROUND(COALESCE((v_pay->>'fee_amount')::numeric, 0), 2)
+    END;
+
     INSERT INTO public.sale_payments (
       establishment_id, sale_id, payment_method, settlement_mode,
       provider_name, external_transaction_id, external_payload,
@@ -361,14 +422,14 @@ BEGIN
     ) VALUES (
       p_establishment_id, v_sale_id,
       v_pay->>'payment_method',
-      COALESCE(v_pay->>'settlement_mode', 'manual_pos'),
-      v_pay->>'provider_name',
+      COALESCE(v_cfg.settlement_mode, v_pay->>'settlement_mode', 'manual_pos'),
+      COALESCE(v_cfg.provider_name, v_pay->>'provider_name'),
       v_pay->>'external_transaction_id',
       COALESCE(v_pay->'external_payload', '{}'::jsonb),
-      ROUND((v_pay->>'gross_amount')::numeric, 2),
-      COALESCE((v_pay->>'fee_percent')::numeric, 0),
-      ROUND(COALESCE((v_pay->>'fee_amount')::numeric, 0), 2),
-      ROUND((v_pay->>'gross_amount')::numeric - COALESCE((v_pay->>'fee_amount')::numeric, 0), 2),
+      v_pay_gross,
+      COALESCE(v_cfg.fee_percent, (v_pay->>'fee_percent')::numeric, 0),
+      v_pay_fee,
+      ROUND(v_pay_gross - v_pay_fee, 2),
       COALESCE(v_pay->>'status', 'approved')
     ) RETURNING id INTO v_payment_id;
 
@@ -376,9 +437,9 @@ BEGIN
       establishment_id, cash_register_id, sale_payment_id, created_by,
       movement_type, payment_method, amount, description
     ) VALUES (
-      p_establishment_id, p_cash_register_id, v_payment_id, p_created_by,
+      p_establishment_id, p_cash_register_id, v_payment_id, v_caller_id,
       'sale_inflow', v_pay->>'payment_method',
-      ROUND((v_pay->>'gross_amount')::numeric, 2),
+      v_pay_gross,
       'Venda PDV #' || substring(v_sale_id::text, 1, 8)
     );
   END LOOP;
@@ -387,10 +448,10 @@ BEGIN
 END;
 $$;
 
--- 2. CANCEL PDV SALE (Estorno atômico de caixa + estoque)
+-- 2. CANCEL PDV SALE (Permissão verificada estritamente sobre auth.uid())
 CREATE OR REPLACE FUNCTION public.cancel_pdv_sale(
   p_sale_id uuid,
-  p_cancelled_by uuid,
+  p_cancelled_by uuid DEFAULT NULL,
   p_reason text DEFAULT 'Estorno operacional'
 )
 RETURNS void
@@ -399,12 +460,17 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_caller_id uuid := auth.uid();
   v_sale record;
   v_reg_status text;
   v_allowed boolean := false;
   v_item record;
   v_pay record;
 BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Sessão não autenticada.';
+  END IF;
+
   SELECT * INTO v_sale FROM public.sales WHERE id = p_sale_id FOR UPDATE;
   IF NOT FOUND THEN
     RAISE EXCEPTION 'Venda não localizada.';
@@ -422,7 +488,7 @@ BEGIN
     INTO v_allowed
     FROM public.user_profiles up
     JOIN public.access_profiles ap ON ap.id = up.profile_id
-   WHERE up.user_id = p_cancelled_by;
+   WHERE up.user_id = v_caller_id;
 
   IF NOT v_allowed THEN
     RAISE EXCEPTION 'Seu perfil não possui permissão para estornar vendas.';
@@ -435,7 +501,7 @@ BEGIN
 
   UPDATE public.sales
      SET status = 'cancelled',
-         cancelled_by = p_cancelled_by,
+         cancelled_by = v_caller_id,
          cancel_reason = p_reason,
          cancelled_at = now()
    WHERE id = p_sale_id;
@@ -459,7 +525,7 @@ BEGIN
       establishment_id, cash_register_id, sale_payment_id, created_by,
       movement_type, payment_method, amount, description
     ) VALUES (
-      v_sale.establishment_id, v_sale.cash_register_id, v_pay.id, p_cancelled_by,
+      v_sale.establishment_id, v_sale.cash_register_id, v_pay.id, v_caller_id,
       'sale_reversal_outflow', v_pay.payment_method, v_pay.gross_amount,
       'Estorno Venda #' || substring(p_sale_id::text, 1, 8)
     );
@@ -480,11 +546,16 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_caller_id uuid := auth.uid();
   v_reg record;
   v_expected_cash numeric(12,2) := 0;
   v_diff numeric(12,2) := 0;
   v_summary jsonb;
 BEGIN
+  IF v_caller_id IS NULL THEN
+    RAISE EXCEPTION 'Sessão não autenticada.';
+  END IF;
+
   SELECT * INTO v_reg FROM public.cash_registers WHERE id = p_cash_register_id FOR UPDATE;
   IF NOT FOUND OR v_reg.status <> 'open' THEN
     RAISE EXCEPTION 'Este caixa já está fechado ou não existe.';
@@ -525,7 +596,7 @@ BEGIN
 
   UPDATE public.cash_registers
      SET status = 'closed',
-         closed_by = p_closed_by,
+         closed_by = v_caller_id,
          closing_cash_expected = v_expected_cash,
          closing_cash_declared = p_declared_cash,
          cash_difference_amount = v_diff,
@@ -557,11 +628,12 @@ SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
+  v_caller_id uuid := auth.uid();
   v_item jsonb;
   v_inserted integer := 0;
   v_row_count integer;
 BEGIN
-  IF NOT public.can_access_establishment(p_establishment_id) THEN
+  IF v_caller_id IS NULL OR NOT public.can_access_establishment(p_establishment_id) THEN
     RAISE EXCEPTION 'Acesso negado.';
   END IF;
 
@@ -574,7 +646,7 @@ BEGIN
     ) VALUES (
       p_establishment_id,
       p_employee_id,
-      p_created_by,
+      v_caller_id,
       v_item->>'description',
       'fixed',
       COALESCE((v_item->>'is_provision')::boolean, false),
@@ -597,7 +669,7 @@ BEGIN
 END;
 $$;
 
--- 5. GET FINANCIAL DASHBOARD (Visão Dupla Realizado vs Previsto + Provisões)
+-- 5. GET FINANCIAL DASHBOARD (Visão Dupla Realizado vs Previsto + Provisões em fuso BRT)
 CREATE OR REPLACE FUNCTION public.get_financial_dashboard(
   p_establishment_id uuid,
   p_start_date date,
@@ -630,7 +702,7 @@ BEGIN
     FROM public.sales
    WHERE establishment_id = p_establishment_id
      AND status = 'completed'
-     AND created_at::date BETWEEN p_start_date AND p_end_date;
+     AND (created_at AT TIME ZONE 'America/Sao_Paulo')::date BETWEEN p_start_date AND p_end_date;
 
   SELECT
     COALESCE(SUM(amount) FILTER (WHERE is_provision = false AND expense_type = 'fixed' AND status = 'paid'), 0),

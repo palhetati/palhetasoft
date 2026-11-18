@@ -4,7 +4,8 @@ import type { ParametroWebRow } from './types';
 export function resolveParametroValue<T>(
   rows: ParametroWebRow[],
   chave: string,
-  establishmentId?: string | null
+  establishmentId?: string | null,
+  expectJson: boolean = true
 ): T | null {
   const matching = rows.filter((r) => r.chave_parametro === chave);
   if (matching.length === 0) return null;
@@ -17,10 +18,46 @@ export function resolveParametroValue<T>(
 
   if (!chosen) return null;
 
+  if (!expectJson) {
+    return chosen.valor_parametro as unknown as T;
+  }
+
   try {
     return JSON.parse(chosen.valor_parametro) as T;
   } catch {
-    return chosen.valor_parametro as unknown as T;
+    return null;
+  }
+}
+
+export function validateCltParametroJson(raw: string): { valid: boolean; reason?: string } {
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      !parsed ||
+      typeof parsed !== 'object' ||
+      typeof parsed.fgtsRate !== 'number' ||
+      !Array.isArray(parsed.inssBrackets) ||
+      parsed.inssBrackets.length === 0 ||
+      !Array.isArray(parsed.irrfBrackets) ||
+      typeof parsed.vtEmployeeCapPercent !== 'number' ||
+      typeof parsed.thirteenthFraction !== 'number' ||
+      typeof parsed.vacationMonthlyFraction !== 'number' ||
+      typeof parsed.vacationBonusFraction !== 'number' ||
+      !parsed.dueDays ||
+      typeof parsed.dueDays.salaryDay !== 'number'
+    ) {
+      return {
+        valid: false,
+        reason:
+          'O JSON de clt_tributos_vigentes precisa conter fgtsRate, inssBrackets, irrfBrackets, frações de 13º e férias, vtEmployeeCapPercent e dueDays.',
+      };
+    }
+    return { valid: true };
+  } catch {
+    return {
+      valid: false,
+      reason: 'O valor informado para clt_tributos_vigentes não é um JSON válido.',
+    };
   }
 }
 

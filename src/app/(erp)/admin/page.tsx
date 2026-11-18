@@ -10,12 +10,28 @@ export default async function AdminPage() {
   const { session, moduleHelp } = await getCurrentErpContext('/admin');
   const supabase = await createSupabaseServerClient();
 
+  let profilesQuery = supabase
+    .from('access_profiles')
+    .select('id, name, description, can_cancel_sales')
+    .order('name');
+  let usersQuery = supabase
+    .from('app_users')
+    .select('id, full_name, email, is_super_admin')
+    .order('full_name');
+
+  if (session.activeEstablishmentId) {
+    profilesQuery = profilesQuery.eq('establishment_id', session.activeEstablishmentId);
+    usersQuery = usersQuery.or(
+      `establishment_id.eq.${session.activeEstablishmentId},is_super_admin.eq.true`
+    );
+  }
+
   const [{ data: establishments }, { data: modules }, { data: profiles }, { data: users }, { data: parametros }] =
     await Promise.all([
       supabase.from('establishments').select('id, name, slug, business_vertical, tax_regime').order('name'),
       supabase.from('system_modules').select('*').order('sort_order'),
-      supabase.from('access_profiles').select('id, name, description, can_cancel_sales').order('name'),
-      supabase.from('app_users').select('id, full_name, email, is_super_admin').order('full_name'),
+      profilesQuery,
+      usersQuery,
       supabase.from('parametros_web').select('*').order('chave_parametro'),
     ]);
 

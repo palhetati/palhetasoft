@@ -122,19 +122,21 @@ export function flattenNavigationTreeFromRows(
     const items = (byParent.get(parentId) ?? []).sort(
       (a, b) => a.sort_order - b.sort_order || a.label.localeCompare(b.label)
     );
-    return items.map((m) => ({
-      id: m.id,
-      parentId: m.parent_id,
-      code: m.code,
-      label: m.label,
-      routePath: m.route_path,
-      iconName: m.icon_name,
-      helpTitle: m.help_title,
-      helpText: m.help_text,
-      moduleScope: m.module_scope,
-      sortOrder: m.sort_order,
-      children: walk(m.id),
-    }));
+    return items
+      .map((m) => ({
+        id: m.id,
+        parentId: m.parent_id,
+        code: m.code,
+        label: m.label,
+        routePath: m.route_path,
+        iconName: m.icon_name,
+        helpTitle: m.help_title,
+        helpText: m.help_text,
+        moduleScope: m.module_scope,
+        sortOrder: m.sort_order,
+        children: walk(m.id),
+      }))
+      .filter((node) => node.routePath !== null || node.children.length > 0);
   };
 
   return walk(null);

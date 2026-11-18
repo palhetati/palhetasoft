@@ -43,6 +43,9 @@ export function ExpensesClient({
   const [filterType, setFilterType] = useState<'all' | 'fixed' | 'variable' | 'provisions'>('all');
   const [filterStatus, setFilterStatus] = useState<'all' | 'pending' | 'paid'>('all');
   const [modalOpen, setModalOpen] = useState(false);
+  const [settleExpense, setSettleExpense] = useState<ExpenseRow | null>(null);
+  const [settleMethod, setSettleMethod] = useState('pix');
+  const [settleRegisterId, setSettleRegisterId] = useState('');
   const [payNow, setPayNow] = useState(false);
   const [payMethod, setPayMethod] = useState('pix');
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'warning'; text: string } | null>(
@@ -162,28 +165,29 @@ export function ExpensesClient({
                     variant="utility"
                     disabled={isPending}
                     onClick={() => {
-                      startTransition(async () => {
-                        const res = await markExpensePaidAction(r.id, 'pix');
-                        if (res.error) setFeedback({ tone: 'warning', text: res.error });
-                        else setFeedback({ tone: 'success', text: 'Despesa baixada como paga.' });
-                      });
+                      setSettleMethod('pix');
+                      setSettleRegisterId('');
+                      setSettleExpense(r);
                     }}
                   >
                     Dar Baixa
                   </Button>
                 )}
-                <Button
-                  size="sm"
-                  variant="danger-utility"
-                  disabled={isPending}
-                  onClick={() => {
-                    startTransition(async () => {
-                      await cancelExpenseAction(r.id);
-                    });
-                  }}
-                >
-                  Cancelar
-                </Button>
+                {r.status === 'pending' && (
+                  <Button
+                    size="sm"
+                    variant="danger-utility"
+                    disabled={isPending}
+                    onClick={() => {
+                      startTransition(async () => {
+                        const res = await cancelExpenseAction(r.id);
+                        if (res?.error) setFeedback({ tone: 'warning', text: res.error });
+                      });
+                    }}
+                  >
+                    Cancelar
+                  </Button>
+                )}
               </div>
             ),
           },
@@ -293,6 +297,64 @@ export function ExpensesClient({
             </Button>
           </div>
         </form>
+      </Modal>
+
+      <Modal
+        open={Boolean(settleExpense)}
+        onClose={() => setSettleExpense(null)}
+        title={`Dar Baixa: ${settleExpense?.description ?? ''}`}
+      >
+        <div className="space-y-4">
+          <Select
+            label="Meio de Pagamento Utilizado"
+            value={settleMethod}
+            onChange={(e) => setSettleMethod(e.target.value)}
+            options={[
+              { value: 'pix', label: 'PIX ou Conta Bancária' },
+              { value: 'cash', label: 'Dinheiro em Espécie' },
+              { value: 'debit_card', label: 'Cartão de Débito' },
+            ]}
+          />
+
+          {settleMethod === 'cash' && (
+            <Select
+              label="Retirar de qual Caixa aberto?"
+              value={settleRegisterId}
+              onChange={(e) => setSettleRegisterId(e.target.value)}
+              options={[
+                { value: '', label: 'Cofre externo (sem mexer na gaveta)' },
+                ...openRegisters.map((reg) => ({ value: reg.id, label: reg.label })),
+              ]}
+            />
+          )}
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="utility" onClick={() => setSettleExpense(null)}>
+              Cancelar
+            </Button>
+            <Button
+              variant="primary"
+              disabled={isPending}
+              onClick={() => {
+                if (!settleExpense) return;
+                startTransition(async () => {
+                  const res = await markExpensePaidAction(
+                    settleExpense.id,
+                    settleMethod,
+                    settleMethod === 'cash' ? settleRegisterId || null : null
+                  );
+                  if (res.error) setFeedback({ tone: 'warning', text: res.error });
+                  else {
+                    setFeedback({ tone: 'success', text: 'Despesa baixada como paga.' });
+                    setSettleExpense(null);
+                  }
+                });
+              }}
+            >
+              Confirmar Baixa ({formatBRL(settleExpense?.amount ?? 0)})
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

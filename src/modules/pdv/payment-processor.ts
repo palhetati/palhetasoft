@@ -85,6 +85,14 @@ export function prepareSplitSalePayload(
   }
 
   const grossAmount = roundCents(subtotalAmount - cleanDiscount);
+  if (grossAmount <= 0) {
+    throw new Error('O total da venda deve ter valor maior que zero.');
+  }
+
+  if (splits.length === 0 || splits.some((s) => roundCents(s.gross_amount) <= 0)) {
+    throw new Error('Cada parcela de pagamento dividido deve ter valor maior que zero.');
+  }
+
   const splitsSum = roundCents(splits.reduce((acc, s) => acc + roundCents(s.gross_amount), 0));
 
   if (splitsSum !== grossAmount) {

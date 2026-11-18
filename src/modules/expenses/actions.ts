@@ -4,6 +4,21 @@ import { revalidatePath } from 'next/cache';
 import { createSupabaseServerClient } from '@/lib/supabase/server';
 import { getCurrentErpContext } from '@/modules/auth/actions';
 
+async function ensureOpenRegisterForTenant(
+  cashRegisterId: string,
+  establishmentId: string
+): Promise<boolean> {
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase
+    .from('cash_registers')
+    .select('id')
+    .eq('id', cashRegisterId)
+    .eq('establishment_id', establishmentId)
+    .eq('status', 'open')
+    .maybeSingle();
+  return Boolean(data?.id);
+}
+
 export async function createExpenseAction(formData: FormData) {
   const { session } = await getCurrentErpContext();
   if (!session.activeEstablishmentId) {
@@ -23,6 +38,13 @@ export async function createExpenseAction(formData: FormData) {
     return { error: 'Preencha descrição, valor válido e data de vencimento.' };
   }
 
+  if (payNow && cashRegisterId && paymentMethod === 'cash') {
+    const validOpen = await ensureOpenRegisterForTenant(cashRegisterId, session.activeEstablishmentId);
+    if (!validOpen) {
+      return { error: 'O caixa selecionado não está aberto para retirada em espécie.' };
+    }
+  }
+
   const supabase = await createSupabaseServerClient();
 
   const { data: expense, error } = await supabase
@@ -30,7 +52,7 @@ export async function createExpenseAction(formData: FormData) {
     .insert({
       establishment_id: session.activeEstablishmentId,
       category_id: categoryId,
-      cash_register_id: payNow && cashRegisterId ? cashRegisterId : null,
+      cash_register_id: payNow && cashRegisterId && paymentMethod === 'cash' ? cashRegisterId : null,
       created_by: session.userId,
       description,
       expense_type: expenseType,
@@ -75,6 +97,13 @@ export async function markExpensePaidAction(
   const { session } = await getCurrentErpContext();
   if (!session.activeEstablishmentId) return { error: 'Empresa não selecionada.' };
 
+  if (cashRegisterId && paymentMethod === 'cash') {
+    const validOpen = await ensureOpenRegisterForTenant(cashRegisterId, session.activeEstablishmentId);
+    if (!validOpen) {
+      return { error: 'O caixa selecionado não está aberto para retirada em espécie.' };
+    }
+  }
+
   const supabase = await createSupabaseServerClient();
   const { data: exp } = await supabase
     .from('expenses')
@@ -83,8 +112,8 @@ export async function markExpensePaidAction(
     .eq('establishment_id', session.activeEstablishmentId)
     .single();
 
-  if (!exp || exp.status === 'paid') {
-    return { error: 'Despesa não localizada ou já quitada.' };
+  if (!exp || exp.status !== 'pending') {
+    return { error: 'Apenas despesas pendentes podem receber baixa.' };
   }
 
   const { error } = await supabase
@@ -93,7 +122,7 @@ export async function markExpensePaidAction(
       status: 'paid',
       paid_at: new Date().toISOString(),
       payment_method: paymentMethod,
-      cash_register_id: cashRegisterId || null,
+      cash_register_id: cashRegisterId && paymentMethod === 'cash' ? cashRegisterId : null,
     })
     .eq('id', expenseId);
 
@@ -123,6 +152,21 @@ export async function cancelExpenseAction(expenseId: string) {
   if (!session.activeEstablishmentId) return { error: 'Empresa não selecionada.' };
 
   const supabase = await createSupabaseServerClient();
+  const { data: exp } = await supabase
+    .from('expenses')
+    .select('id, status, cash_register_id')
+    .eq('id', expenseId)
+    .eq('establishment_id', session.activeEstablishmentId)
+    .single();
+
+  if (!exp) return { error: 'Despesa não localizada.' };
+  if (exp.status === 'paid' && exp.cash_register_id) {
+    return {
+      error:
+        'Esta despesa já foi retirada fisicamente da gaveta de um caixa. Faça um suprimento no caixa caso o valor tenha retornado.',
+    };
+  }
+
   const { error } = await supabase
     .from('expenses')
     .update({ status: 'cancelled' })
