@@ -22,7 +22,7 @@ export function HelpHint({ title, description }: HelpHintProps) {
         aria-label={`Ajuda: ${cleanTitle}`}
         title={`Ajuda sobre ${cleanTitle}`}
         onClick={() => setOpen((prev) => !prev)}
-        className="!min-h-[36px] !min-w-[36px] !p-1.5 text-ink-muted hover:text-primary"
+        className="!min-h-[30px] !min-w-[30px] !p-1 text-ink-muted hover:text-primary"
       >
         <CircleHelp className="h-4 w-4" strokeWidth={2} />
       </Button>

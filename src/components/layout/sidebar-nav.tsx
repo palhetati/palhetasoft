@@ -104,7 +104,7 @@ export function SidebarNav({ session, establishments, onNavigate }: SidebarNavPr
       <div className="space-y-5 overflow-y-auto">
         <div className="flex items-center justify-between px-2 pt-1">
           <div>
-            <span className="typo-title font-bold text-ink">Palheta Soft</span>
+            <span className="typo-title text-ink">Palheta Soft</span>
             {session.activeEstablishmentName && (
               <p className="typo-caption truncate text-ink-muted">
                 {session.activeEstablishmentName}

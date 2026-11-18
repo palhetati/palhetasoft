@@ -38,7 +38,7 @@ describe('Global Architectural Guardrails (palhetasoft-design, UI Reuse, Context
     }
   });
 
-  it('ensures every ERP module route lives inside a Card and renders PageHeader with contextual (?) help', () => {
+  it('ensures every ERP module route lives inside a Card, stacks sections in flex-col, and renders PageHeader', () => {
     const erpRoutes = [
       'dashboard',
       'pdv',
@@ -66,6 +66,48 @@ describe('Global Architectural Guardrails (palhetasoft-design, UI Reuse, Context
         combinedSource.includes('flex-col'),
         `Missing flex-col structural stacking on /${route}`
       ).toBe(true);
+    }
+  });
+
+  it('forbids arbitrary Tailwind font sizes, font-bold/extrabold, raw hex/palette colors, heavy shadows, and manual spinners in screens', () => {
+    const screenAndLayoutFiles = [
+      ...listFilesRecursive(path.resolve(process.cwd(), 'src/app')),
+      ...listFilesRecursive(path.resolve(process.cwd(), 'src/components/layout')),
+    ];
+
+    const forbiddenFontSizeRegex =
+      /\btext-(xs|sm|base|lg|xl|2xl|3xl|4xl|5xl|6xl|7xl|8xl|9xl)\b|text-\[\d+px\]|\bfont-(bold|extrabold)\b|\bfontSize\b/;
+    const forbiddenColorRegex =
+      /#[0-9a-fA-F]{3,8}\b|\b(bg|text|border)-(slate|gray|zinc|neutral|stone|red|amber|yellow|lime|emerald|cyan|blue|indigo|violet|fuchsia|rose)-\d+\b/;
+    const forbiddenShadowOrGradientRegex = /\bshadow-(md|lg|xl|2xl)\b|\bbg-gradient-/;
+    const manualSpinnerRegex = /\banimate-spin\b|<Loader2\b/;
+
+    for (const file of screenAndLayoutFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      const rel = path.relative(process.cwd(), file);
+
+      expect(
+        forbiddenFontSizeRegex.test(content),
+        `Forbidden font size/weight class found in ${rel}; use typo-* classes or UI components.`
+      ).toBe(false);
+      expect(
+        forbiddenColorRegex.test(content),
+        `Raw hex or default Tailwind palette color found in ${rel}; use @theme tokens.`
+      ).toBe(false);
+      expect(
+        forbiddenShadowOrGradientRegex.test(content),
+        `Forbidden heavy shadow or gradient found in ${rel}.`
+      ).toBe(false);
+    }
+
+    const appScreenFiles = listFilesRecursive(path.resolve(process.cwd(), 'src/app'));
+    for (const file of appScreenFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      const rel = path.relative(process.cwd(), file);
+      expect(
+        manualSpinnerRegex.test(content),
+        `Manual spinner found in ${rel}; use LoadingState or Button loading.`
+      ).toBe(false);
     }
   });
 

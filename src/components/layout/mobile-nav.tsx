@@ -18,7 +18,7 @@ export function MobileNav({ session, establishments }: MobileNavProps) {
     <>
       <header className="sticky top-0 z-30 flex items-center justify-between border-b border-hairline bg-surface px-4 py-2.5 lg:hidden">
         <div>
-          <span className="typo-title font-bold text-ink">Palheta Soft</span>
+          <span className="typo-title text-ink">Palheta Soft</span>
           {session.activeEstablishmentName && (
             <p className="typo-caption text-ink-muted">{session.activeEstablishmentName}</p>
           )}

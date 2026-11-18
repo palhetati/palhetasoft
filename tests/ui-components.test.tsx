@@ -8,15 +8,20 @@ import {
   Badge,
   Button,
   Card,
+  ChoiceChips,
   ConfirmModal,
   HelpHint,
   Input,
+  LoadMore,
   LoadingState,
   Modal,
+  MultiChoiceChips,
   PageHeader,
   ResponsiveDataTable,
   RowActions,
   Select,
+  StatCard,
+  TileButton,
   Tooltip,
 } from '@/components/ui';
 
@@ -193,9 +198,64 @@ describe('Centralized DESIGN.md + palhetasoft-design Reusable UI Kit', () => {
     expect(screen.getByText('Caixa aberto')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Ver detalhamento contábil CLT/i }));
     expect(screen.getByText('FGTS Mensal parametrizado')).toBeInTheDocument();
-    // Numbered pagination renders page 2 button
+    // Numbered pagination renders page 2 button and marks page 1 with aria-current="page"
+    expect(screen.getByRole('button', { name: '1' })).toHaveAttribute('aria-current', 'page');
     fireEvent.click(screen.getByRole('button', { name: '2' }));
     expect(onPageChange).toHaveBeenCalledWith(2);
     expect(screen.getByText('Confirmar Abertura')).toBeInTheDocument();
+  });
+
+  it('renders StatCard, ChoiceChips, MultiChoiceChips, TileButton, and LoadMore following palhetasoft-design', () => {
+    const onChipChange = vi.fn();
+    const onMultiToggle = vi.fn();
+    const onTileClick = vi.fn();
+    const onLoadMore = vi.fn();
+
+    render(
+      <div>
+        <StatCard
+          tone="featured"
+          label="Líquido realizado"
+          value="R$ 4.820,00"
+          footnote="Caixas abertos: 2"
+        />
+        <ChoiceChips
+          ariaLabel="Período"
+          value="hoje"
+          onChange={onChipChange}
+          options={[
+            { value: 'hoje', label: 'Hoje' },
+            { value: 'mes', label: 'Este mês' },
+          ]}
+        />
+        <MultiChoiceChips
+          ariaLabel="Módulos"
+          values={['pdv']}
+          onToggle={onMultiToggle}
+          options={[
+            { value: 'pdv', label: 'PDV' },
+            { value: 'caixa', label: 'Caixa' },
+          ]}
+        />
+        <TileButton
+          title="Água de coco gelada"
+          value="R$ 8,00"
+          aside="2 no pedido"
+          selected
+          onClick={onTileClick}
+        />
+        <LoadMore hasMore={true} onLoadMore={onLoadMore} label="Ver mais itens" />
+      </div>
+    );
+
+    expect(screen.getByText('R$ 4.820,00').className).toContain('typo-heading-2');
+    fireEvent.click(screen.getByRole('button', { name: 'Este mês' }));
+    expect(onChipChange).toHaveBeenCalledWith('mes');
+    fireEvent.click(screen.getByRole('button', { name: 'Caixa' }));
+    expect(onMultiToggle).toHaveBeenCalledWith('caixa');
+    fireEvent.click(screen.getByRole('button', { name: /Água de coco gelada/i }));
+    expect(onTileClick).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Ver mais itens' }));
+    expect(onLoadMore).toHaveBeenCalledTimes(1);
   });
 });

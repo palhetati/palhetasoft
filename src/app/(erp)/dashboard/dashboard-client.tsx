@@ -1,16 +1,20 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   Alert,
   Badge,
   Button,
   Card,
+  ChoiceChips,
   LoadingState,
   PageHeader,
   ResponsiveDataTable,
+  StatCard,
+  TruncatedText,
 } from '@/components/ui';
+import { humanizeSaleStatus } from '@/lib/domain-labels';
 import { formatBRL, formatDateBR } from '@/lib/formatters';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import type { FinancialSummaryOutput } from '@/modules/dashboard/calculations';
@@ -44,7 +48,10 @@ export function DashboardClient({
   endOfMonth,
 }: DashboardClientProps) {
   const [periodo, setPeriodo] = useState<'hoje' | 'mes'>('mes');
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const requestRef = useRef(0);
+
   const [summary, setSummary] = useState<FinancialSummaryOutput | null>(null);
   const [openRegistersCount, setOpenRegistersCount] = useState(0);
   const [recentSales, setRecentSales] = useState<RecentSaleRow[]>([]);
@@ -55,11 +62,12 @@ export function DashboardClient({
 
   const loadData = useCallback(async () => {
     if (!establishmentId) {
-      setLoading(false);
+      setInitialLoading(false);
       return;
     }
 
-    setLoading(true);
+    const reqId = ++requestRef.current;
+    setRefreshing(true);
     setErrorMsg(null);
     const supabase = createSupabaseBrowserClient();
 
@@ -82,6 +90,8 @@ export function DashboardClient({
           .order('created_at', { ascending: false })
           .limit(8),
       ]);
+
+    if (reqId !== requestRef.current) return;
 
     if (rpcErr) {
       setErrorMsg('Não foi possível carregar os indicadores financeiros agora.');
@@ -109,7 +119,8 @@ export function DashboardClient({
       );
     }
 
-    setLoading(false);
+    setRefreshing(false);
+    setInitialLoading(false);
   }, [establishmentId, startDate, endDate]);
 
   useEffect(() => {
@@ -120,9 +131,11 @@ export function DashboardClient({
     return (
       <Card variant="flat" className="flex flex-col gap-5">
         <PageHeader title={title} helpTitle={helpTitle} helpText={helpText} />
-        <Alert tone="info" title="Nenhuma empresa selecionada">
-          Escolha um estabelecimento no menu lateral para acompanhar os resultados.
-        </Alert>
+        <Card variant="soft" title="Nenhuma empresa selecionada">
+          <p className="typo-body-md text-ink-muted">
+            Escolha um estabelecimento no menu lateral para acompanhar os resultados.
+          </p>
+        </Card>
       </Card>
     );
   }
@@ -131,27 +144,20 @@ export function DashboardClient({
     <Card variant="flat" className="flex flex-col gap-5">
       <PageHeader
         title={title}
-        subtitle={`Período analisado: ${formatDateBR(startDate)} até ${formatDateBR(endDate)}`}
+        subtitle={`Período: ${formatDateBR(startDate)} até ${formatDateBR(endDate)}`}
         helpTitle={helpTitle}
         helpText={helpText}
         actions={
           <>
-            <Button
-              size="sm"
-              variant={periodo === 'hoje' ? 'primary' : 'utility'}
-              disabled={loading}
-              onClick={() => setPeriodo('hoje')}
-            >
-              Hoje
-            </Button>
-            <Button
-              size="sm"
-              variant={periodo === 'mes' ? 'primary' : 'utility'}
-              disabled={loading}
-              onClick={() => setPeriodo('mes')}
-            >
-              Este Mês
-            </Button>
+            <ChoiceChips
+              ariaLabel="Período analisado"
+              value={periodo}
+              onChange={setPeriodo}
+              options={[
+                { value: 'hoje', label: 'Hoje' },
+                { value: 'mes', label: 'Este mês' },
+              ]}
+            />
             <Link href="/pdv">
               <Button size="sm" variant="secondary">
                 Abrir PDV
@@ -167,85 +173,62 @@ export function DashboardClient({
         </Alert>
       )}
 
-      {loading || !summary ? (
+      {initialLoading || !summary ? (
         <LoadingState label="Carregando..." />
+      ) : refreshing ? (
+        <LoadingState label="Atualizando..." />
       ) : (
         <div className="flex flex-col gap-5">
-          {/* Cards de indicadores/dados livres para grid responsivo; seções estruturais abaixo seguem em flex-col */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <Card
-              variant="featured-night"
-              title="Líquido Realizado (Caixa Real)"
-              helpTitle="O que é o Líquido Realizado"
-              helpText="Mostra o valor que efetivamente sobrou no período. Soma as vendas líquidas de taxas e desconta apenas as despesas fixas e variáveis já quitadas."
-            >
-              <p className="typo-heading-2 text-on-primary">
-                {formatBRL(summary.realizedNetProfit)}
-              </p>
-              <p className="typo-caption mt-1 text-on-primary/80">
-                Caixas abertos agora: {openRegistersCount}
-              </p>
-            </Card>
-
-            <Card
-              variant="soft"
-              title="Faturamento Bruto e Taxas"
-              subtitle={`Taxas descontadas: ${formatBRL(summary.totalFees)}`}
-            >
-              <p className="typo-heading-3 text-ink">{formatBRL(summary.grossRevenue)}</p>
-              <p className="typo-caption mt-1 text-ink-muted">
-                Receita líquida: {formatBRL(summary.netSalesRevenue)}
-              </p>
-            </Card>
-
-            <Card
-              variant="soft"
-              title="Líquido Previsto do Período"
-              helpTitle="O que é o Líquido Previsto"
-              helpText="Projeta quanto sobrará após pagar todas as contas fixas e variáveis que ainda estão pendentes neste período."
-            >
-              <p className="typo-heading-3 text-ink">{formatBRL(summary.projectedNetProfit)}</p>
-              <p className="typo-caption mt-1 text-ink-muted">
-                Contas pendentes:{' '}
-                {formatBRL(summary.fixedExpensesPending + summary.variableExpensesPending)}
-              </p>
-            </Card>
-
-            <Card
-              variant="soft"
-              title="Reserva Trabalhista (CLT)"
+          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))]">
+            <StatCard
+              tone="featured"
+              label="Líquido realizado"
+              value={formatBRL(summary.realizedNetProfit)}
+              footnote={`Caixas abertos agora: ${openRegistersCount}`}
+              helpTitle="O que é o líquido realizado"
+              helpText="Soma as vendas já descontadas das taxas e subtrai apenas as despesas pagas no período."
+            />
+            <StatCard
+              label="Faturamento bruto"
+              value={formatBRL(summary.grossRevenue)}
+              footnote={`Taxas: ${formatBRL(summary.totalFees)} · Líquido: ${formatBRL(summary.netSalesRevenue)}`}
+            />
+            <StatCard
+              label="Líquido previsto"
+              value={formatBRL(summary.projectedNetProfit)}
+              footnote={`Contas pendentes: ${formatBRL(summary.fixedExpensesPending + summary.variableExpensesPending)}`}
+              helpTitle="O que é o líquido previsto"
+              helpText="Mostra quanto sobrará depois de quitar todas as contas fixas e variáveis pendentes do período."
+            />
+            <StatCard
+              label="Reserva trabalhista (CLT)"
+              value={formatBRL(summary.accountingProvisionsTotal)}
+              footnote="Provisão de 13º salário e férias"
               helpTitle="Para que serve esta reserva"
-              helpText="Indica quanto guardar no mês para décimo terceiro salário e férias com um terço, sem descontar duas vezes do seu caixa real."
-            >
-              <p className="typo-heading-3 text-ink">
-                {formatBRL(summary.accountingProvisionsTotal)}
-              </p>
-              <p className="typo-caption mt-1 text-ink-muted">
-                Provisão de 13º salário e férias
-              </p>
-            </Card>
+              helpText="Indica quanto guardar no mês para décimo terceiro e férias com um terço, sem descontar duas vezes do caixa real."
+            />
           </div>
 
           <Card
             variant="soft"
-            title="Despesas Fixas e Variáveis"
-            subtitle="Resumo comparativo entre valores pagos e contas em aberto"
+            title="Despesas fixas e variáveis"
+            subtitle="Valores já pagos e contas pendentes no período"
           >
             <div className="flex flex-col gap-3">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-hairline pb-2">
-                <span className="typo-body-sm font-medium text-ink">Despesas Fixas</span>
-                <span className="typo-body-sm text-ink-secondary">
-                  Pagas: <strong>{formatBRL(summary.fixedExpensesPaid)}</strong> · Pendentes:{' '}
-                  <strong className="text-accent-orange-deep">
+                <span className="typo-body-sm font-medium text-ink">Despesas fixas</span>
+                <span className="typo-body-sm tabular-nums text-ink-secondary">
+                  Pagas: <strong className="font-semibold text-ink">{formatBRL(summary.fixedExpensesPaid)}</strong> · Pendentes:{' '}
+                  <strong className="font-semibold text-accent-orange-deep">
                     {formatBRL(summary.fixedExpensesPending)}
                   </strong>
                 </span>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="typo-body-sm font-medium text-ink">Despesas Variáveis</span>
-                <span className="typo-body-sm text-ink-secondary">
-                  Pagas: <strong>{formatBRL(summary.variableExpensesPaid)}</strong> · Pendentes:{' '}
-                  <strong className="text-accent-orange-deep">
+                <span className="typo-body-sm font-medium text-ink">Despesas variáveis</span>
+                <span className="typo-body-sm tabular-nums text-ink-secondary">
+                  Pagas: <strong className="font-semibold text-ink">{formatBRL(summary.variableExpensesPaid)}</strong> · Pendentes:{' '}
+                  <strong className="font-semibold text-accent-orange-deep">
                     {formatBRL(summary.variableExpensesPending)}
                   </strong>
                 </span>
@@ -253,16 +236,27 @@ export function DashboardClient({
             </div>
           </Card>
 
-          <Card variant="flat" title="Últimas Vendas Registradas">
+          <Card
+            variant="flat"
+            title="Últimas vendas"
+            headerAction={
+              <span className="typo-caption text-ink-muted">{recentSales.length} itens</span>
+            }
+          >
             <ResponsiveDataTable
               keyExtractor={(row) => row.id}
-              emptyMessage="Nenhuma venda registrada neste período."
+              emptyMessage="Nenhuma venda neste período."
               data={recentSales}
               columns={[
                 {
                   key: 'cliente',
                   header: 'Identificação',
-                  render: (r) => r.customer_name || `Venda #${r.id.slice(0, 6)}`,
+                  render: (r) => (
+                    <TruncatedText
+                      text={r.customer_name || `Venda #${r.id.slice(0, 6)}`}
+                      maxWidthClass="max-w-[200px]"
+                    />
+                  ),
                 },
                 {
                   key: 'data',
@@ -274,21 +268,21 @@ export function DashboardClient({
                   header: 'Situação',
                   render: (r) => (
                     <Badge sticker={r.status === 'completed' ? 'green' : 'orange'}>
-                      {r.status === 'completed' ? 'Concluída' : 'Estornada'}
+                      {humanizeSaleStatus(r.status)}
                     </Badge>
                   ),
                 },
                 {
                   key: 'bruto',
-                  header: 'Valor Bruto',
+                  header: 'Valor bruto',
                   align: 'right',
-                  render: (r) => formatBRL(r.gross_amount),
+                  render: (r) => <span className="tabular-nums">{formatBRL(r.gross_amount)}</span>,
                 },
                 {
                   key: 'liquido',
-                  header: 'Valor Líquido',
+                  header: 'Valor líquido',
                   align: 'right',
-                  render: (r) => formatBRL(r.net_amount),
+                  render: (r) => <span className="tabular-nums">{formatBRL(r.net_amount)}</span>,
                 },
               ]}
             />

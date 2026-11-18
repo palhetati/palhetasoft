@@ -1,5 +1,15 @@
 export { Button, type ButtonProps, type ButtonVariant, type ButtonSize } from './button';
 export { Card, type CardProps, type CardVariant } from './card';
+export { StatCard, type StatCardProps } from './stat-card';
+export {
+  ChoiceChips,
+  MultiChoiceChips,
+  type ChoiceChipsProps,
+  type MultiChoiceChipsProps,
+  type ChoiceChipOption,
+} from './choice-chips';
+export { LoadMore, type LoadMoreProps } from './load-more';
+export { TileButton, type TileButtonProps } from './tile-button';
 export { Input, Textarea, type InputProps, type TextareaProps } from './input';
 export { Select, type SelectProps, type SelectOption } from './select';
 export { Badge, type BadgeProps, type BadgeSticker } from './badge';

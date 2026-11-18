@@ -35,10 +35,16 @@ export function Accordion({
           {badge}
         </span>
         <ChevronDown
-          className={`h-4 w-4 text-ink-muted transition-transform ${open ? 'rotate-180' : ''}`}
+          className={`h-4 w-4 text-ink-muted transition-transform duration-200 ease-out ${open ? 'rotate-180' : ''}`}
         />
       </Button>
-      {open && <div className="border-t border-hairline px-4 py-4">{children}</div>}
+      <div
+        className={`overflow-hidden transition-all duration-200 ease-out ${
+          open ? 'max-h-[40rem] opacity-100' : 'max-h-0 opacity-0'
+        }`}
+      >
+        <div className="border-t border-hairline px-4 py-4">{children}</div>
+      </div>
     </div>
   );
 }

@@ -37,24 +37,22 @@ export function Card({
   return (
     <div className={`${variants[variant]} ${className}`.trim()} {...props}>
       {(title || headerAction || helpText) && (
-        <div className="mb-3 flex items-start justify-between gap-3">
+        <div className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-1.5">
               {title && (
-                <h3
-                  className={`typo-caption font-semibold ${
-                    isDark ? 'text-on-primary/90' : 'text-ink-secondary'
-                  }`}
-                >
+                // Título de seção: um degrau abaixo do título da tela (typo-heading-1)
+                // e acima do corpo (14px). Nunca menor que o texto que ele nomeia.
+                <h2 className={`typo-heading-3 ${isDark ? 'text-on-primary' : 'text-ink'}`}>
                   {title}
-                </h3>
+                </h2>
               )}
               {helpText && (
                 <HelpHint title={helpTitle ?? title ?? 'Informação'} description={helpText} />
               )}
             </div>
             {subtitle && (
-              <p className={`typo-caption mt-0.5 ${isDark ? 'text-on-primary/75' : 'text-ink-muted'}`}>
+              <p className={`typo-caption mt-1 ${isDark ? 'text-on-primary/75' : 'text-ink-muted'}`}>
                 {subtitle}
               </p>
             )}

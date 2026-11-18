@@ -14,7 +14,9 @@ import {
   PageHeader,
   ResponsiveDataTable,
   Select,
+  TruncatedText,
 } from '@/components/ui';
+import { CASH_MOVEMENT_LABELS } from '@/lib/domain-labels';
 import { formatBRL, formatDateBR } from '@/lib/formatters';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import {
@@ -61,7 +63,8 @@ export function CaixaClient({
   helpTitle,
   helpText,
 }: CaixaClientProps) {
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [historyLoading, setHistoryLoading] = useState(true);
   const [points, setPoints] = useState<Array<{ id: string; name: string }>>([]);
   const [openRegisters, setOpenRegisters] = useState<OpenRegisterView[]>([]);
   const [closedHistory, setClosedHistory] = useState<ClosedRegisterView[]>([]);
@@ -71,6 +74,8 @@ export function CaixaClient({
   const [pointModal, setPointModal] = useState(false);
   const [openModal, setOpenModal] = useState(false);
   const [movementModalRegId, setMovementModalRegId] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+
   const [closeModalReg, setCloseModalReg] = useState<OpenRegisterView | null>(null);
   const [declaredCashInput, setDeclaredCashInput] = useState('0');
   const [closeNotesInput, setCloseNotesInput] = useState('');
@@ -81,65 +86,74 @@ export function CaixaClient({
   );
   const [isPending, startTransition] = useTransition();
 
-  const loadData = useCallback(
+  const loadOpenAndPoints = useCallback(async () => {
+    if (!establishmentId) {
+      setInitialLoading(false);
+      return;
+    }
+
+    const supabase = createSupabaseBrowserClient();
+    const [{ data: pts }, { data: openRows }] = await Promise.all([
+      supabase
+        .from('register_points')
+        .select('id, name')
+        .eq('establishment_id', establishmentId)
+        .eq('is_active', true)
+        .order('name'),
+      supabase
+        .from('cash_registers')
+        .select(
+          'id, opening_balance, opened_at, register_points(name), cash_movements(movement_type, payment_method, amount)'
+        )
+        .eq('establishment_id', establishmentId)
+        .eq('status', 'open')
+        .order('opened_at', { ascending: false }),
+    ]);
+
+    setPoints(pts ?? []);
+    setOpenRegisters(
+      (openRows ?? []).map((row: Record<string, unknown>) => {
+        const point = row.register_points as { name?: string } | null;
+        const movements = ((row.cash_movements as CashMovementInput[]) ?? []).map((m) => ({
+          ...m,
+          amount: Number(m.amount),
+        }));
+        const recon = calculateDrawerExpectedCash(Number(row.opening_balance), movements);
+        return {
+          id: String(row.id),
+          pointName: point?.name ?? 'Caixa',
+          openingBalance: Number(row.opening_balance),
+          expectedPhysicalCash: recon.expectedPhysicalCash,
+          nonCashBreakdown: recon.nonCashBreakdown,
+          openedAt: String(row.opened_at),
+        };
+      })
+    );
+    setInitialLoading(false);
+  }, [establishmentId]);
+
+  const loadClosedHistory = useCallback(
     async (targetPage: number) => {
       if (!establishmentId) {
-        setLoading(false);
+        setHistoryLoading(false);
         return;
       }
 
-      setLoading(true);
+      setHistoryLoading(true);
       const supabase = createSupabaseBrowserClient();
       const from = (targetPage - 1) * PAGE_SIZE;
       const to = from + PAGE_SIZE - 1;
 
-      const [{ data: pts }, { data: openRows }, { data: closedRows, count }] = await Promise.all([
-        supabase
-          .from('register_points')
-          .select('id, name')
-          .eq('establishment_id', establishmentId)
-          .eq('is_active', true)
-          .order('name'),
-        supabase
-          .from('cash_registers')
-          .select(
-            'id, opening_balance, opened_at, register_points(name), cash_movements(movement_type, payment_method, amount)'
-          )
-          .eq('establishment_id', establishmentId)
-          .eq('status', 'open')
-          .order('opened_at', { ascending: false }),
-        supabase
-          .from('cash_registers')
-          .select(
-            'id, closing_cash_expected, closing_cash_declared, cash_difference_amount, closed_at, register_points(name)',
-            { count: 'exact' }
-          )
-          .eq('establishment_id', establishmentId)
-          .eq('status', 'closed')
-          .order('closed_at', { ascending: false })
-          .range(from, to),
-      ]);
-
-      setPoints(pts ?? []);
-
-      setOpenRegisters(
-        (openRows ?? []).map((row: Record<string, unknown>) => {
-          const point = row.register_points as { name?: string } | null;
-          const movements = ((row.cash_movements as CashMovementInput[]) ?? []).map((m) => ({
-            ...m,
-            amount: Number(m.amount),
-          }));
-          const recon = calculateDrawerExpectedCash(Number(row.opening_balance), movements);
-          return {
-            id: String(row.id),
-            pointName: point?.name ?? 'Caixa',
-            openingBalance: Number(row.opening_balance),
-            expectedPhysicalCash: recon.expectedPhysicalCash,
-            nonCashBreakdown: recon.nonCashBreakdown,
-            openedAt: String(row.opened_at),
-          };
-        })
-      );
+      const { data: closedRows, count } = await supabase
+        .from('cash_registers')
+        .select(
+          'id, closing_cash_expected, closing_cash_declared, cash_difference_amount, closed_at, register_points(name)',
+          { count: 'exact' }
+        )
+        .eq('establishment_id', establishmentId)
+        .eq('status', 'closed')
+        .order('closed_at', { ascending: false })
+        .range(from, to);
 
       setClosedHistory(
         (closedRows ?? []).map((row: Record<string, unknown>) => {
@@ -155,30 +169,50 @@ export function CaixaClient({
         })
       );
       setTotalClosed(count ?? 0);
-      setLoading(false);
+      setHistoryLoading(false);
     },
     [establishmentId]
   );
 
   useEffect(() => {
-    void loadData(page);
-  }, [loadData, page]);
+    void loadOpenAndPoints();
+  }, [loadOpenAndPoints]);
+
+  useEffect(() => {
+    void loadClosedHistory(page);
+  }, [loadClosedHistory, page]);
+
+  const refreshAll = async (targetPage = page) => {
+    await Promise.all([loadOpenAndPoints(), loadClosedHistory(targetPage)]);
+  };
 
   return (
     <Card variant="flat" className="flex flex-col gap-5">
       <PageHeader
         title={title}
-        subtitle="Gerencie múltiplos pontos de caixa abertos ao mesmo tempo com conferência de gaveta."
+        subtitle="Abra, acompanhe e feche os caixas do dia."
         helpTitle={helpTitle}
         helpText={helpText}
         actions={
           <>
-            <Button variant="utility" onClick={() => setPointModal(true)}>
-              Novo Ponto de Caixa
+            <Button
+              variant="utility"
+              onClick={() => {
+                setModalError(null);
+                setPointModal(true);
+              }}
+            >
+              Novo ponto de caixa
             </Button>
-            <Button variant="primary" onClick={() => setOpenModal(true)}>
+            <Button
+              variant="primary"
+              onClick={() => {
+                setModalError(null);
+                setOpenModal(true);
+              }}
+            >
               <Plus className="h-4 w-4" />
-              Abrir Turno de Caixa
+              Abrir turno de caixa
             </Button>
           </>
         }
@@ -190,86 +224,94 @@ export function CaixaClient({
         </Alert>
       )}
 
-      {/* Seção de Caixas Abertos empilhados em flex-col */}
-      <Card variant="soft" title={`Caixas Abertos Agora (${openRegisters.length})`}>
-        {loading ? (
-          <LoadingState label="Carregando..." />
-        ) : openRegisters.length === 0 ? (
-          <p className="typo-body-md py-4 text-ink-muted">
-            Nenhum turno de caixa aberto no momento. Clique em Abrir Turno de Caixa para iniciar o atendimento.
+      {initialLoading ? (
+        <Card variant="soft" title="Caixas abertos">
+          <LoadingState compact label="Carregando..." />
+        </Card>
+      ) : openRegisters.length === 0 ? (
+        <Card variant="soft" title="Caixas abertos">
+          <p className="typo-body-md text-ink-muted">
+            Nenhum caixa aberto agora. Abra um turno para começar a vender.
           </p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {openRegisters.map((reg) => (
-              <Card
-                key={reg.id}
-                variant="flat"
-                title={reg.pointName}
-                subtitle={`Aberto em ${formatDateBR(reg.openedAt)}`}
-                helpTitle="Conferência Física da Gaveta"
-                helpText="O saldo esperado na gaveta soma apenas o dinheiro vivo de troco inicial, vendas em espécie e suprimentos, descontando sangrias e despesas pagas em dinheiro. PIX e Cartões ficam separados abaixo."
-                headerAction={<Badge sticker="green">Turno Aberto</Badge>}
-              >
-                <div className="flex flex-col gap-3">
-                  <div className="rounded-md bg-canvas-soft p-3">
-                    <span className="typo-caption text-ink-muted">
-                      Dinheiro Físico Esperado na Gaveta
-                    </span>
-                    <p className="typo-heading-2 text-ink">
-                      {formatBRL(reg.expectedPhysicalCash)}
-                    </p>
-                    <span className="typo-caption text-ink-faint">
-                      Fundo inicial: {formatBRL(reg.openingBalance)}
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap gap-4 typo-body-sm">
-                    <span>
-                      PIX no turno: <strong>{formatBRL(reg.nonCashBreakdown.pix ?? 0)}</strong>
-                    </span>
-                    <span>
-                      Cartão de Débito:{' '}
-                      <strong>{formatBRL(reg.nonCashBreakdown.debit_card ?? 0)}</strong>
-                    </span>
-                    <span>
-                      Cartão de Crédito:{' '}
-                      <strong>{formatBRL(reg.nonCashBreakdown.credit_card ?? 0)}</strong>
-                    </span>
-                  </div>
-
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <Button
-                      size="sm"
-                      variant="utility"
-                      onClick={() => setMovementModalRegId(reg.id)}
-                    >
-                      Suprimento ou Sangria
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onClick={() => {
-                        setDeclaredCashInput(reg.expectedPhysicalCash.toFixed(2));
-                        setCloseNotesInput('');
-                        setCloseError(null);
-                        setCloseModalReg(reg);
-                      }}
-                    >
-                      Fechar Caixa
-                    </Button>
-                  </div>
+        </Card>
+      ) : (
+        <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))]">
+          {openRegisters.map((reg) => (
+            <Card
+              key={reg.id}
+              variant="soft"
+              title={reg.pointName}
+              subtitle={`Aberto em ${formatDateBR(reg.openedAt)}`}
+              helpTitle="Dinheiro esperado na gaveta"
+              helpText="Soma o troco inicial, as vendas em dinheiro e os suprimentos, e desconta as sangrias e as despesas pagas em dinheiro. PIX e cartões ficam separados."
+              headerAction={<Badge sticker="green">Turno aberto</Badge>}
+            >
+              <div className="flex flex-col gap-4">
+                <div className="flex flex-col gap-1">
+                  <span className="typo-caption text-ink-muted">Dinheiro esperado na gaveta</span>
+                  <p className="typo-heading-2 tabular-nums text-ink">
+                    {formatBRL(reg.expectedPhysicalCash)}
+                  </p>
+                  <span className="typo-caption text-ink-muted">
+                    Troco inicial: {formatBRL(reg.openingBalance)}
+                  </span>
                 </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </Card>
 
-      {/* Histórico Paginado no Backend */}
-      <Card variant="flat" title="Histórico de Fechamentos">
+                <dl className="grid gap-3 border-t border-hairline pt-3 grid-cols-[repeat(auto-fit,minmax(6.5rem,1fr))]">
+                  {[
+                    { key: 'pix', label: 'PIX' },
+                    { key: 'debit_card', label: 'Cartão de débito' },
+                    { key: 'credit_card', label: 'Cartão de crédito' },
+                  ].map((m) => (
+                    <div key={m.key} className="flex flex-col gap-0.5">
+                      <dt className="typo-caption text-ink-muted">{m.label}</dt>
+                      <dd className="typo-body-sm font-medium tabular-nums text-ink">
+                        {formatBRL(reg.nonCashBreakdown[m.key] ?? 0)}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+
+                <div className="flex flex-wrap justify-end gap-2 border-t border-hairline pt-3">
+                  <Button
+                    size="sm"
+                    variant="utility"
+                    onClick={() => {
+                      setModalError(null);
+                      setMovementModalRegId(reg.id);
+                    }}
+                  >
+                    Suprimento ou sangria
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => {
+                      setDeclaredCashInput(reg.expectedPhysicalCash.toFixed(2));
+                      setCloseNotesInput('');
+                      setCloseError(null);
+                      setCloseModalReg(reg);
+                    }}
+                  >
+                    Fechar caixa
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <Card
+        variant="flat"
+        title="Histórico de fechamentos"
+        headerAction={
+          <span className="typo-caption text-ink-muted">{totalClosed} itens</span>
+        }
+      >
         <ResponsiveDataTable
           keyExtractor={(r) => r.id}
-          loading={loading}
+          loading={historyLoading}
           emptyMessage="Nenhum caixa encerrado ainda."
           data={closedHistory}
           pagination={{
@@ -277,23 +319,27 @@ export function CaixaClient({
             page,
             pageSize: PAGE_SIZE,
             totalCount: totalClosed,
-            loading,
+            loading: historyLoading,
             onPageChange: (next) => setPage(next),
           }}
           columns={[
-            { key: 'ponto', header: 'Ponto de Caixa', render: (r) => r.pointName },
+            {
+              key: 'ponto',
+              header: 'Ponto de caixa',
+              render: (r) => <TruncatedText text={r.pointName} maxWidthClass="max-w-[200px]" />,
+            },
             { key: 'data', header: 'Fechado em', render: (r) => formatDateBR(r.closedAt) },
             {
               key: 'esp',
-              header: 'Esperado em Espécie',
+              header: 'Esperado em espécie',
               align: 'right',
-              render: (r) => formatBRL(r.expectedCash),
+              render: (r) => <span className="tabular-nums">{formatBRL(r.expectedCash)}</span>,
             },
             {
               key: 'dec',
-              header: 'Contado na Gaveta',
+              header: 'Contado na gaveta',
               align: 'right',
-              render: (r) => formatBRL(r.declaredCash),
+              render: (r) => <span className="tabular-nums">{formatBRL(r.declaredCash)}</span>,
             },
             {
               key: 'dif',
@@ -301,7 +347,7 @@ export function CaixaClient({
               align: 'right',
               render: (r) => (
                 <Badge sticker={r.difference === 0 ? 'green' : 'orange'}>
-                  {formatBRL(r.difference)}
+                  <span className="tabular-nums">{formatBRL(r.difference)}</span>
                 </Badge>
               ),
             },
@@ -309,36 +355,45 @@ export function CaixaClient({
         />
       </Card>
 
-      {/* Modal: Novo Ponto de Caixa */}
-      <Modal open={pointModal} onClose={() => setPointModal(false)} title="Novo Ponto de Caixa">
+      <Modal open={pointModal} onClose={() => setPointModal(false)} title="Novo ponto de caixa">
         <form
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            setModalError(null);
             const fd = new FormData(e.currentTarget);
             startTransition(async () => {
               const res = await createRegisterPointAction(fd);
-              if (res.error) setFeedback({ tone: 'warning', text: res.error });
+              if (res.error) setModalError(res.error);
               else {
                 setFeedback({ tone: 'success', text: 'Ponto de caixa criado com sucesso.' });
                 setPointModal(false);
-                await loadData(page);
+                await loadOpenAndPoints();
               }
             });
           }}
         >
-          <Input
-            name="name"
-            label="Nome do Ponto"
-            placeholder="Ex: Caixa Portaria Principal"
-            required
-          />
-          <Input
-            name="location_note"
-            label="Localização (opcional)"
-            placeholder="Ex: Entrada do balneário"
-          />
-          <div className="flex justify-end gap-2">
+          {modalError && (
+            <Alert tone="warning" title="Não foi possível criar">
+              {modalError}
+            </Alert>
+          )}
+          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]">
+            <Input
+              name="name"
+              label="Nome do ponto"
+              placeholder="Ex: Caixa portaria principal"
+              containerClassName="col-span-full"
+              required
+            />
+            <Input
+              name="location_note"
+              label="Localização (opcional)"
+              placeholder="Ex: Entrada do balneário"
+              containerClassName="col-span-full"
+            />
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
             <Button variant="utility" disabled={isPending} onClick={() => setPointModal(false)}>
               Cancelar
             </Button>
@@ -346,48 +401,59 @@ export function CaixaClient({
               type="submit"
               variant="primary"
               loading={isPending}
-              loadingText="Carregando..."
+              loadingText="Criando..."
             >
-              Criar Ponto
+              Criar ponto
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Modal: Abrir Turno */}
-      <Modal open={openModal} onClose={() => setOpenModal(false)} title="Abrir Turno de Caixa">
+      <Modal open={openModal} onClose={() => setOpenModal(false)} title="Abrir turno de caixa">
         <form
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            setModalError(null);
             const fd = new FormData(e.currentTarget);
             startTransition(async () => {
               const res = await openCashRegisterAction(fd);
-              if (res.error) setFeedback({ tone: 'warning', text: res.error });
+              if (res.error) setModalError(res.error);
               else {
                 setFeedback({ tone: 'success', text: 'Turno aberto com sucesso.' });
                 setOpenModal(false);
-                await loadData(page);
+                await loadOpenAndPoints();
               }
             });
           }}
         >
-          <Select
-            name="register_point_id"
-            label="Ponto de Atendimento"
-            options={points.map((p) => ({ value: p.id, label: p.name }))}
-          />
-          <Input
-            name="opening_balance"
-            type="number"
-            step="0.01"
-            min="0"
-            defaultValue="100.00"
-            label="Fundo de Troco Inicial em Dinheiro (R$)"
-            required
-          />
-          <Input name="notes" label="Observação do Turno (opcional)" />
-          <div className="flex justify-end gap-2">
+          {modalError && (
+            <Alert tone="warning" title="Não foi possível abrir o turno">
+              {modalError}
+            </Alert>
+          )}
+          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]">
+            <Select
+              name="register_point_id"
+              label="Ponto de atendimento"
+              options={points.map((p) => ({ value: p.id, label: p.name }))}
+            />
+            <Input
+              name="opening_balance"
+              type="number"
+              step="0.01"
+              min="0"
+              defaultValue="100.00"
+              label="Troco inicial em dinheiro (R$)"
+              required
+            />
+            <Input
+              name="notes"
+              label="Observação (opcional)"
+              containerClassName="col-span-full"
+            />
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
             <Button variant="utility" disabled={isPending} onClick={() => setOpenModal(false)}>
               Cancelar
             </Button>
@@ -395,60 +461,74 @@ export function CaixaClient({
               type="submit"
               variant="primary"
               loading={isPending}
-              loadingText="Carregando..."
+              loadingText="Abrindo..."
             >
-              Confirmar Abertura
+              Abrir turno
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* Modal: Suprimento ou Sangria */}
       <Modal
         open={Boolean(movementModalRegId)}
         onClose={() => setMovementModalRegId(null)}
-        title="Registrar Suprimento ou Sangria"
+        title="Suprimento ou sangria"
       >
         <form
           className="flex flex-col gap-4"
           onSubmit={(e) => {
             e.preventDefault();
+            setModalError(null);
             const fd = new FormData(e.currentTarget);
             fd.set('cash_register_id', movementModalRegId ?? '');
             startTransition(async () => {
               const res = await recordDrawerMovementAction(fd);
-              if (res.error) setFeedback({ tone: 'warning', text: res.error });
+              if (res.error) setModalError(res.error);
               else {
-                setFeedback({ tone: 'success', text: 'Movimentação registrada na gaveta.' });
+                setFeedback({ tone: 'success', text: 'Movimentação salva na gaveta.' });
                 setMovementModalRegId(null);
-                await loadData(page);
+                await loadOpenAndPoints();
               }
             });
           }}
         >
-          <Select
-            name="movement_type"
-            label="Tipo de Operação"
-            options={[
-              { value: 'supply_inflow', label: 'Suprimento (Entrada de troco na gaveta)' },
-              { value: 'bleed_outflow', label: 'Sangria (Retirada de dinheiro para cofre)' },
-            ]}
-          />
-          <Input
-            name="amount"
-            type="number"
-            step="0.01"
-            min="0.01"
-            label="Valor em Espécie (R$)"
-            required
-          />
-          <Input
-            name="description"
-            label="Motivo"
-            placeholder="Ex: Recolhimento parcial da tarde"
-            required
-          />
-          <div className="flex justify-end gap-2">
+          {modalError && (
+            <Alert tone="warning" title="Não foi possível salvar">
+              {modalError}
+            </Alert>
+          )}
+          <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]">
+            <Select
+              name="movement_type"
+              label="Tipo de operação"
+              options={[
+                {
+                  value: 'supply_inflow',
+                  label: `${CASH_MOVEMENT_LABELS.supply_inflow} (entrada na gaveta)`,
+                },
+                {
+                  value: 'bleed_outflow',
+                  label: `${CASH_MOVEMENT_LABELS.bleed_outflow} (retirada para o cofre)`,
+                },
+              ]}
+            />
+            <Input
+              name="amount"
+              type="number"
+              step="0.01"
+              min="0.01"
+              label="Valor em dinheiro (R$)"
+              required
+            />
+            <Input
+              name="description"
+              label="Motivo"
+              placeholder="Ex: Recolhimento parcial da tarde"
+              containerClassName="col-span-full"
+              required
+            />
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
             <Button
               variant="utility"
               disabled={isPending}
@@ -460,23 +540,22 @@ export function CaixaClient({
               type="submit"
               variant="primary"
               loading={isPending}
-              loadingText="Carregando..."
+              loadingText="Salvando..."
             >
-              Confirmar
+              Salvar movimentação
             </Button>
           </div>
         </form>
       </Modal>
 
-      {/* ConfirmModal Compartilhado para Fechamento de Caixa */}
       <ConfirmModal
         open={Boolean(closeModalReg)}
         onClose={() => setCloseModalReg(null)}
-        title={`Encerrar o turno de ${closeModalReg?.pointName ?? 'Caixa'}?`}
-        description="Conte as cédulas e moedas presentes fisicamente na gaveta e confirme o valor total abaixo para concluir o fechamento."
+        title={`Fechar o caixa ${closeModalReg?.pointName ?? ''}?`}
+        description="O turno não aceitará novas vendas e o valor contado na gaveta ficará salvo para conferência."
         tone="primary"
-        confirmLabel="Encerrar Turno"
-        loadingLabel="Carregando..."
+        confirmLabel="Fechar caixa"
+        loadingLabel="Fechando..."
         loading={isPending}
         errorMessage={closeError}
         onConfirm={() => {
@@ -490,27 +569,30 @@ export function CaixaClient({
             if (res.error) {
               setCloseError(res.error);
             } else {
-              setFeedback({ tone: 'success', text: 'Caixa encerrado e conferido com sucesso.' });
+              setFeedback({ tone: 'success', text: 'Caixa fechado e conferido com sucesso.' });
               setCloseModalReg(null);
-              await loadData(1);
+              setPage(1);
+              await refreshAll(1);
             }
           });
         }}
       >
-        <div className="flex flex-col gap-3">
+        <div className="grid gap-4 grid-cols-[repeat(auto-fit,minmax(min(100%,12rem),1fr))]">
           <Input
             type="number"
             step="0.01"
             min="0"
             value={declaredCashInput}
             onChange={(e) => setDeclaredCashInput(e.target.value)}
-            label="Total em Dinheiro Contado na Gaveta (R$)"
+            label="Total em dinheiro contado na gaveta (R$)"
+            containerClassName="col-span-full"
             required
           />
           <Input
             value={closeNotesInput}
             onChange={(e) => setCloseNotesInput(e.target.value)}
-            label="Observações do Fechamento (opcional)"
+            label="Observações do fechamento (opcional)"
+            containerClassName="col-span-full"
           />
         </div>
       </ConfirmModal>

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useCallback, useEffect, useState, useTransition } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { Minus, Plus, RotateCcw, ShoppingBag, Trash2 } from 'lucide-react';
 import {
@@ -8,16 +8,21 @@ import {
   Badge,
   Button,
   Card,
+  ChoiceChips,
   ConfirmModal,
   Input,
+  LoadMore,
   LoadingState,
   Modal,
   PageHeader,
   ResponsiveDataTable,
   RowActions,
   Select,
+  TileButton,
+  Tooltip,
+  TruncatedText,
 } from '@/components/ui';
-import { humanizeCategory } from '@/lib/domain-labels';
+import { humanizeSaleStatus } from '@/lib/domain-labels';
 import { formatBRL, roundCents } from '@/lib/formatters';
 import { createSupabaseBrowserClient } from '@/lib/supabase/client';
 import { cancelPdvSaleAction, finalizePdvSaleAction } from '@/modules/pdv/actions';
@@ -55,6 +60,14 @@ export interface PdvClientProps {
 
 const BATCH_SIZE = 12;
 
+const CATEGORY_OPTIONS = [
+  { value: 'all', label: 'Todos' },
+  { value: 'bar', label: 'Bar e bebidas' },
+  { value: 'restaurante', label: 'Restaurante' },
+  { value: 'loja', label: 'Loja' },
+  { value: 'geral', label: 'Geral' },
+];
+
 export function PdvClient({
   establishmentId,
   canCancelSales,
@@ -69,8 +82,12 @@ export function PdvClient({
 
   // Infinite scroll state for Products
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [products, setProducts] = useState<PdvProduct[]>([]);
+  const [loadingProducts, setLoadingProducts] = useState(true);
+  // Cada busca nova invalida as anteriores: resposta atrasada não sobrescreve a atual.
+  const productsRequestRef = useRef(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(false);
   const [loadingMoreProducts, setLoadingMoreProducts] = useState(false);
 
@@ -96,9 +113,16 @@ export function PdvClient({
   );
   const [isPending, startTransition] = useTransition();
 
+  // Espera a pessoa parar de digitar antes de consultar, sem recarregar a tela.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
+
   const fetchProductsBatch = useCallback(
     async (offset: number, append: boolean) => {
       if (!establishmentId) return;
+      const requestId = append ? productsRequestRef.current : ++productsRequestRef.current;
       if (append) setLoadingMoreProducts(true);
 
       const supabase = createSupabaseBrowserClient();
@@ -109,9 +133,13 @@ export function PdvClient({
         .eq('is_active', true);
 
       if (categoryFilter !== 'all') q = q.eq('category', categoryFilter);
-      if (search.trim()) q = q.ilike('name', `%${search.trim()}%`);
+      if (debouncedSearch) q = q.ilike('name', `%${debouncedSearch}%`);
 
       const { data, count } = await q.order('name').range(offset, offset + BATCH_SIZE - 1);
+      if (requestId !== productsRequestRef.current) {
+        if (append) setLoadingMoreProducts(false);
+        return;
+      }
       const mapped = ((data ?? []) as PdvProduct[]).map((p) => ({
         ...p,
         unit_price: Number(p.unit_price),
@@ -121,9 +149,16 @@ export function PdvClient({
       setProducts((prev) => (append ? [...prev, ...mapped] : mapped));
       setHasMoreProducts(offset + mapped.length < (count ?? 0));
       setLoadingMoreProducts(false);
+      setLoadingProducts(false);
     },
-    [establishmentId, categoryFilter, search]
+    [establishmentId, categoryFilter, debouncedSearch]
   );
+
+  // Busca e categoria recarregam só o catálogo; o resto da tela fica como está.
+  useEffect(() => {
+    setLoadingProducts(true);
+    void fetchProductsBatch(0, false);
+  }, [fetchProductsBatch]);
 
   const fetchSalesBatch = useCallback(
     async (offset: number, append: boolean) => {
@@ -190,9 +225,9 @@ export function PdvClient({
     setPaymentMethods(mappedMethods);
     if (mappedMethods[0]) setPrimaryMethod(mappedMethods[0].code);
 
-    await Promise.all([fetchProductsBatch(0, false), fetchSalesBatch(0, false)]);
+    await fetchSalesBatch(0, false);
     setLoading(false);
-  }, [establishmentId, fetchProductsBatch, fetchSalesBatch]);
+  }, [establishmentId, fetchSalesBatch]);
 
   useEffect(() => {
     void loadInitialSetup();
@@ -286,7 +321,7 @@ export function PdvClient({
       <div className="flex max-h-60 flex-col gap-2 overflow-y-auto border-y border-hairline py-3">
         {cart.length === 0 ? (
           <p className="typo-body-sm py-3 text-center text-ink-muted">
-            Adicione itens do catálogo acima para montar o pedido.
+            Toque num produto do catálogo para adicionar ao pedido.
           </p>
         ) : (
           cart.map(({ product, quantity }) => (
@@ -333,28 +368,21 @@ export function PdvClient({
       <div className="flex flex-col gap-3 rounded-md bg-canvas-soft p-3">
         <div className="flex items-center justify-between">
           <span className="typo-body-sm text-ink-muted">Total a Receber</span>
-          <span className="typo-heading-2 text-ink">{formatBRL(totalGross)}</span>
+          <span className="typo-heading-2 tabular-nums text-ink">{formatBRL(totalGross)}</span>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            variant={!splitMode ? 'primary' : 'utility'}
-            onClick={() => setSplitMode(false)}
-          >
-            Pagamento Único
-          </Button>
-          <Button
-            size="sm"
-            variant={splitMode ? 'primary' : 'utility'}
-            onClick={() => {
-              setSplitMode(true);
-              setPrimarySplitAmount((totalGross / 2).toFixed(2));
-            }}
-          >
-            Dividir Pagamento
-          </Button>
-        </div>
+        <ChoiceChips
+          ariaLabel="Forma de cobrança"
+          value={splitMode ? 'split' : 'single'}
+          onChange={(mode) => {
+            setSplitMode(mode === 'split');
+            if (mode === 'split') setPrimarySplitAmount((totalGross / 2).toFixed(2));
+          }}
+          options={[
+            { value: 'single', label: 'Pagamento único' },
+            { value: 'split', label: 'Dividir pagamento' },
+          ]}
+        />
 
         <Select
           label={splitMode ? 'Primeira Forma de Pagamento' : 'Forma de Pagamento'}
@@ -389,19 +417,21 @@ export function PdvClient({
 
       <div className="flex gap-2">
         {cart.length > 0 && (
-          <Button variant="utility" onClick={() => setCart([])} aria-label="Limpar carrinho">
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          <Tooltip content="Limpar pedido">
+            <Button variant="utility" onClick={() => setCart([])} aria-label="Limpar pedido">
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          </Tooltip>
         )}
         <Button
           variant="primary"
           fullWidth
           disabled={cart.length === 0}
           loading={isPending}
-          loadingText="Carregando..."
+          loadingText="Finalizando..."
           onClick={handleCheckout}
         >
-          Finalizar Venda ({formatBRL(totalGross)})
+          Finalizar venda ({formatBRL(totalGross)})
         </Button>
       </div>
     </div>
@@ -425,163 +455,151 @@ export function PdvClient({
       {loading ? (
         <LoadingState label="Carregando..." />
       ) : openRegisters.length === 0 ? (
-        <Card variant="soft" className="flex flex-col gap-4">
-          <Alert tone="warning" title="Nenhum ponto de caixa aberto">
-            Para iniciar as vendas no PDV, abra primeiro o turno do seu ponto de atendimento na tela de Caixa.
-          </Alert>
-          <div>
-            <Link href="/caixa">
-              <Button variant="primary">Ir para Controle de Caixas</Button>
-            </Link>
+        <Card variant="soft" title="Nenhum caixa aberto">
+          <div className="flex flex-col gap-4">
+            <p className="typo-body-md text-ink-muted">
+              Abra um caixa para começar a vender.
+            </p>
+            <div>
+              <Link href="/caixa">
+                <Button variant="primary">Ir para o Caixa</Button>
+              </Link>
+            </div>
           </div>
         </Card>
       ) : (
-        <div className="flex flex-col gap-5">
-          {/* Card 1: Busca e Catálogo com Scroll Infinito */}
-          <Card variant="soft" title="Catálogo de Produtos" className="flex flex-col gap-4">
-            <Input
-              placeholder="Buscar produto pelo nome..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-            <div className="flex flex-wrap gap-2">
-              {[
-                { key: 'all', label: 'Todos' },
-                { key: 'bar', label: 'Bar e Bebidas' },
-                { key: 'restaurante', label: 'Restaurante' },
-                { key: 'loja', label: 'Loja' },
-                { key: 'geral', label: 'Geral' },
-              ].map((cat) => (
-                <Button
-                  key={cat.key}
-                  size="sm"
-                  variant={categoryFilter === cat.key ? 'primary' : 'utility'}
-                  onClick={() => setCategoryFilter(cat.key)}
-                >
-                  {cat.label}
-                </Button>
-              ))}
-            </div>
+        /* Tela de operação: no desktop o pedido fica ao lado do catálogo e acompanha a
+           rolagem (exceção documentada na skill). Abaixo de lg, a barra fixa abre o pedido. */
+        <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex min-w-0 flex-col gap-5">
+            <Card variant="soft" title="Catálogo">
+              <div className="flex flex-col gap-4">
+                <Input
+                  type="search"
+                  aria-label="Buscar produto"
+                  placeholder="Buscar produto pelo nome"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+                <ChoiceChips
+                  ariaLabel="Filtrar por setor"
+                  options={CATEGORY_OPTIONS}
+                  value={categoryFilter}
+                  onChange={setCategoryFilter}
+                />
 
-            <ResponsiveDataTable
-              keyExtractor={(p) => p.id}
-              emptyMessage="Nenhum produto encontrado."
-              data={products}
-              pagination={{
-                mode: 'infinite',
-                hasMore: hasMoreProducts,
-                loadingMore: loadingMoreProducts,
-                onLoadMore: () => void fetchProductsBatch(products.length, true),
-              }}
-              columns={[
-                { key: 'nome', header: 'Produto', render: (p) => p.name },
-                {
-                  key: 'setor',
-                  header: 'Setor',
-                  render: (p) => <Badge sticker="sky">{humanizeCategory(p.category)}</Badge>,
-                },
-                {
-                  key: 'est',
-                  header: 'Estoque',
-                  render: (p) =>
-                    p.track_stock ? (
-                      <Badge sticker={p.stock_quantity <= 0 ? 'orange' : 'green'}>
-                        {p.stock_quantity} un
-                      </Badge>
-                    ) : (
-                      <span className="typo-caption text-ink-muted">Livre</span>
-                    ),
-                },
-                {
-                  key: 'preco',
-                  header: 'Preço',
-                  align: 'right',
-                  render: (p) => <strong>{formatBRL(p.unit_price)}</strong>,
-                },
-                {
-                  key: 'add',
-                  header: 'Adicionar',
-                  align: 'right',
-                  render: (p) => (
-                    <RowActions
-                      actions={[
-                        {
-                          key: 'add',
-                          label: `Adicionar ${p.name} ao pedido`,
-                          icon: <Plus className="h-4 w-4 text-primary" />,
-                          onClick: () => addToCart(p),
-                        },
-                      ]}
-                    />
-                  ),
-                },
-              ]}
-            />
-          </Card>
+                {loadingProducts ? (
+                  <LoadingState compact label="Atualizando..." />
+                ) : products.length === 0 ? (
+                  <p className="rounded-md bg-surface px-4 py-8 text-center typo-body-md text-ink-muted">
+                    Nenhum produto encontrado.
+                  </p>
+                ) : (
+                  <ul className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(min(100%,10.5rem),1fr))]">
+                    {products.map((p) => {
+                      const inCart = cart.find((i) => i.product.id === p.id)?.quantity ?? 0;
+                      const outOfStock = p.track_stock && p.stock_quantity <= 0;
+                      return (
+                        <li key={p.id}>
+                          <TileButton
+                            title={p.name}
+                            aria-label={`Adicionar ${p.name} ao pedido`}
+                            onClick={() => addToCart(p)}
+                            selected={inCart > 0}
+                            value={formatBRL(p.unit_price)}
+                            aside={inCart > 0 ? `${inCart} no pedido` : undefined}
+                            meta={
+                              p.track_stock ? (
+                                <span className={outOfStock ? 'text-accent-orange-deep' : undefined}>
+                                  {outOfStock ? 'Sem estoque' : `${p.stock_quantity} em estoque`}
+                                </span>
+                              ) : undefined
+                            }
+                          />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
 
-          {/* Card 2: Resumo e Fechamento do Pedido */}
-          <Card variant="flat" title="Resumo e Fechamento do Pedido">
-            {cartSummaryContent}
-          </Card>
+                {!loadingProducts && (
+                  <LoadMore
+                    hasMore={hasMoreProducts}
+                    loadingMore={loadingMoreProducts}
+                    onLoadMore={() => void fetchProductsBatch(products.length, true)}
+                    label="Ver mais produtos"
+                  />
+                )}
+              </div>
+            </Card>
 
-          {/* Card 3: Vendas Recentes com Scroll Infinito */}
-          <Card variant="flat" title="Vendas Recentes do Estabelecimento">
-            <ResponsiveDataTable
-              keyExtractor={(r) => r.id}
-              emptyMessage="Nenhuma venda registrada ainda."
-              data={recentSales}
-              pagination={{
-                mode: 'infinite',
-                hasMore: hasMoreSales,
-                loadingMore: loadingMoreSales,
-                onLoadMore: () => void fetchSalesBatch(recentSales.length, true),
-              }}
-              columns={[
-                {
-                  key: 'id',
-                  header: 'Identificação',
-                  render: (r) => r.customer_name || `Venda #${r.id.slice(0, 6)}`,
-                },
-                {
-                  key: 'status',
-                  header: 'Situação',
-                  render: (r) => (
-                    <Badge sticker={r.status === 'completed' ? 'green' : 'orange'}>
-                      {r.status === 'completed' ? 'Concluída' : 'Estornada'}
-                    </Badge>
-                  ),
-                },
-                {
-                  key: 'valor',
-                  header: 'Valor Total',
-                  align: 'right',
-                  render: (r) => formatBRL(r.gross_amount),
-                },
-                {
-                  key: 'estorno',
-                  header: 'Ações',
-                  align: 'right',
-                  render: (r) =>
-                    canCancelSales && r.status === 'completed' ? (
-                      <RowActions
-                        actions={[
-                          {
-                            key: 'cancel',
-                            label: 'Estornar venda e devolver itens ao estoque',
-                            icon: <RotateCcw className="h-4 w-4" />,
-                            tone: 'danger',
-                            disabled: isPending,
-                            onClick: () => {
-                              setCancelError(null);
-                              setCancelSaleTarget(r);
-                            },
-                          },
-                        ]}
+            <Card variant="flat" title="Vendas recentes">
+              <ResponsiveDataTable
+                keyExtractor={(r) => r.id}
+                emptyMessage="Nenhuma venda registrada ainda."
+                data={recentSales}
+                pagination={{
+                  mode: 'infinite',
+                  hasMore: hasMoreSales,
+                  loadingMore: loadingMoreSales,
+                  onLoadMore: () => void fetchSalesBatch(recentSales.length, true),
+                }}
+                columns={[
+                  {
+                    key: 'id',
+                    header: 'Identificação',
+                    render: (r) => (
+                      <TruncatedText
+                        text={r.customer_name || `Venda #${r.id.slice(0, 6)}`}
+                        maxWidthClass="max-w-[180px]"
                       />
-                    ) : null,
-                },
-              ]}
-            />
+                    ),
+                  },
+                  {
+                    key: 'status',
+                    header: 'Situação',
+                    render: (r) => (
+                      <Badge sticker={r.status === 'completed' ? 'green' : 'orange'}>
+                        {humanizeSaleStatus(r.status)}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    key: 'valor',
+                    header: 'Valor total',
+                    align: 'right',
+                    render: (r) => <span className="tabular-nums">{formatBRL(r.gross_amount)}</span>,
+                  },
+                  {
+                    key: 'estorno',
+                    header: 'Ações',
+                    align: 'right',
+                    render: (r) =>
+                      canCancelSales && r.status === 'completed' ? (
+                        <RowActions
+                          actions={[
+                            {
+                              key: 'cancel',
+                              label: 'Estornar venda e devolver itens ao estoque',
+                              icon: <RotateCcw className="h-4 w-4" />,
+                              tone: 'danger',
+                              disabled: isPending,
+                              onClick: () => {
+                                setCancelError(null);
+                                setCancelSaleTarget(r);
+                              },
+                            },
+                          ]}
+                        />
+                      ) : null,
+                  },
+                ]}
+              />
+            </Card>
+          </div>
+
+          <Card variant="flat" title="Pedido" className="hidden lg:sticky lg:top-6 lg:block">
+            {cartSummaryContent}
           </Card>
         </div>
       )}
@@ -599,7 +617,7 @@ export function PdvClient({
       <Modal
         open={mobileCartOpen}
         onClose={() => setMobileCartOpen(false)}
-        title="Fechar Pedido no PDV"
+        title="Pedido"
       >
         {cartSummaryContent}
       </Modal>
@@ -608,14 +626,14 @@ export function PdvClient({
       <ConfirmModal
         open={Boolean(cancelSaleTarget)}
         onClose={() => setCancelSaleTarget(null)}
-        title="Deseja estornar esta venda?"
+        title="Estornar esta venda?"
         description={
           cancelSaleTarget
-            ? `O valor de ${formatBRL(cancelSaleTarget.gross_amount)} será revertido no livro do caixa aberto e os produtos controlados voltarão automaticamente para o estoque.`
+            ? `O valor de ${formatBRL(cancelSaleTarget.gross_amount)} sairá do saldo do caixa aberto e os itens controlados voltarão para o estoque.`
             : ''
         }
-        confirmLabel="Confirmar Estorno"
-        loadingLabel="Carregando..."
+        confirmLabel="Estornar venda"
+        loadingLabel="Estornando..."
         loading={isPending}
         errorMessage={cancelError}
         onConfirm={() => {

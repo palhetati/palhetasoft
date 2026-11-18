@@ -6,14 +6,23 @@ export interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> 
   label?: string;
   hint?: string;
   error?: string;
+  containerClassName?: string;
 }
 
-export function Input({ label, hint, error, id, className = '', ...props }: InputProps) {
+export function Input({
+  label,
+  hint,
+  error,
+  id,
+  className = '',
+  containerClassName = '',
+  ...props
+}: InputProps) {
   const generatedId = useId();
   const inputId = id ?? generatedId;
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={`flex flex-col gap-1.5 ${containerClassName}`.trim()}>
       {label && (
         <label htmlFor={inputId} className="typo-caption font-medium text-ink-secondary">
           {label}
@@ -36,14 +45,22 @@ export function Input({ label, hint, error, id, className = '', ...props }: Inpu
 export interface TextareaProps extends React.TextareaHTMLAttributes<HTMLTextAreaElement> {
   label?: string;
   error?: string;
+  containerClassName?: string;
 }
 
-export function Textarea({ label, error, id, className = '', ...props }: TextareaProps) {
+export function Textarea({
+  label,
+  error,
+  id,
+  className = '',
+  containerClassName = '',
+  ...props
+}: TextareaProps) {
   const generatedId = useId();
   const textareaId = id ?? generatedId;
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={`flex flex-col gap-1.5 ${containerClassName}`.trim()}>
       {label && (
         <label htmlFor={textareaId} className="typo-caption font-medium text-ink-secondary">
           {label}

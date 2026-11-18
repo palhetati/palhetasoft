@@ -85,7 +85,8 @@ body {
   .typo-display-1,
   .typo-display-2,
   .typo-heading-1 {
-    font-size: 22px;
+    /* 24px abre distância do título de card (typo-heading-3, 17px) sem virar marketing. */
+    font-size: 24px;
     letter-spacing: -0.35px;
   }
 }

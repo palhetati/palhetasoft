@@ -11,14 +11,23 @@ export interface SelectProps extends React.SelectHTMLAttributes<HTMLSelectElemen
   label?: string;
   options: SelectOption[];
   error?: string;
+  containerClassName?: string;
 }
 
-export function Select({ label, options, error, id, className = '', ...props }: SelectProps) {
+export function Select({
+  label,
+  options,
+  error,
+  id,
+  className = '',
+  containerClassName = '',
+  ...props
+}: SelectProps) {
   const generatedId = useId();
   const selectId = id ?? generatedId;
 
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={`flex flex-col gap-1.5 ${containerClassName}`.trim()}>
       {label && (
         <label htmlFor={selectId} className="typo-caption font-medium text-ink-secondary">
           {label}
