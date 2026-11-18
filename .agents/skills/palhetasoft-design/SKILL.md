@@ -9,32 +9,44 @@ description: Use when creating, editing, styling, or refactoring any frontend sc
 
 Esta skill governa exclusivamente o frontend do repositório **Palheta Soft**. Toda criação ou refatoração visual deve obedecer simultaneamente à identidade de cores/superfícies do `DESIGN.md` e às regras estruturais, ergonômicas e de performance definidas abaixo.
 
-**Princípio central:** Violar a letra destas regras é violar o espírito delas. Nenhuma pressa autoriza entregar card lado a lado em grid, fonte exagerada, tela travando sem `"Carregando..."`, enum cru na tela ou confirmação improvisada.
+**Princípio central:** Violar a letra destas regras é violar o espírito delas. Nenhuma pressa autoriza entregar seções estruturais espremidas lado a lado, fonte exagerada, tela travando sem `"Carregando..."`, enum cru na tela ou confirmação improvisada.
 
 ---
 
-## 1. Estrutura da Tela: Cards Empilhados em `flex-col` (Desktop e Mobile)
+## 1. Estrutura da Tela (`flex-col`) vs. Elementos de Dados e Conteúdo (Formatação Livre)
 
-1. **Toda tela mora dentro de um `Card`:** Nenhum conteúdo, filtro ou tabela fica solto direto no fundo da página. A página inteira vive dentro de um `Card` estrutural, e a hierarquia interna depende da tela: **pode haver `Card` dentro de `Card`** (por exemplo, o card-mestre da tela contendo subcards de resumo, filtros e listagem), desde que a composição visual fique limpa, suave e coerente.
-2. **Padrão `flex-col` obrigatório (Zero Cards Lado a Lado):**
-   - **Proibido** posicionar cards um ao lado do outro com `grid` (`grid-cols-2`, `grid-cols-3`, `grid-cols-4` ou `flex-row` de cards).
-   - Utilize **sempre `flex flex-col`** (um card embaixo do outro) em **todas as telas do sistema, tanto em telas grandes (desktop) quanto em telas pequenas (mobile)**.
-3. **Mobile-First:** Toda tela nasce pensada primeiro para o celular (`320px` a `600px`) e se expande suavemente para o desktop mantendo o fluxo vertical em `flex-col`.
+1. **Toda tela mora dentro de um `Card`:** Nenhum conteúdo, filtro ou tabela fica solto direto no fundo da página. A página inteira vive dentro de um `Card` estrutural, e a hierarquia interna depende da tela: **pode haver `Card` dentro de `Card`** (por exemplo, o card-mestre da tela contendo subcards de indicadores, filtros e listagem), desde que a composição visual fique limpa, suave e coerente.
+2. **Cards e Blocos de Estrutura da Tela (`flex flex-col` obrigatório):**
+   - Quando o elemento divide a **estrutura macro da página** (card raiz da tela, card de seção de filtros, card de formulário de cadastro, card de tabela/listagem, seções principais), posicione **sempre em `flex flex-col`** (um embaixo do outro), tanto no desktop quanto no mobile.
+   - Nunca coloque duas seções estruturais lado a lado (ex.: formulário na esquerda e tabela na direita em `grid-cols-2`).
+3. **Cards de Indicadores/Badges de Dados e Itens Não-Estruturais (Formatação Livre):**
+   - Quando o elemento exibe **dados rápidos, badges de métricas, KPIs** (como os cards de indicadores do Dashboard ou resumos numéricos), itens de catálogo ou controles internos que **não definem a estrutura macro da página**, a **formatação é livre** (`grid` responsivo, `flex-row`, `flex-wrap`, etc.).
+4. **Mobile-First:** Toda tela e todo agrupamento livre de indicadores ou campos nasce pensado primeiro para o celular (`320px` a `600px`) e se expande suavemente para telas maiores.
 
 ```tsx
-// Padrão estrutural obrigatório de qualquer tela
+// Padrão obrigatório: estrutura macro em flex-col; cards de dados/badges livres
 <Card variant="flat" className="flex flex-col gap-5">
   <PageHeader
-    title="Movimentações do Caixa"
-    helpText="Acompanhe aqui todas as entradas de troco e retiradas realizadas nos caixas."
+    title="Painel Financeiro"
+    helpTitle="Como ler o Painel Financeiro"
+    helpText="Acompanhe aqui o saldo realizado, o faturamento e os últimos lançamentos."
   />
 
-  <Card variant="soft" title="Resumo do Período" className="flex flex-col gap-3">
-    {/* Conteúdo interno organizado sem colocar cards lado a lado */}
+  {/* Cards de indicadores/badges de dados: livres para grid responsivo ou flex-wrap */}
+  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <Card variant="featured-night" title="Líquido Realizado">{/* Valor */}</Card>
+    <Card variant="soft" title="Faturamento Bruto">{/* Valor */}</Card>
+    <Card variant="soft" title="Líquido Previsto">{/* Valor */}</Card>
+    <Card variant="soft" title="Reserva Trabalhista">{/* Valor */}</Card>
+  </div>
+
+  {/* Seções estruturais da tela: sempre empilhadas uma embaixo da outra em flex-col */}
+  <Card variant="soft" title="Filtros do Período">
+    {/* Campos internos livres (flex-wrap / grid responsivo) */}
   </Card>
 
   <Card variant="flat" title="Histórico de Lançamentos">
-    {carregando ? <LoadingState label="Carregando..." /> : <DataGrid ... />}
+    {carregando ? <LoadingState label="Carregando..." /> : <ResponsiveDataTable ... />}
   </Card>
 </Card>
 ```
@@ -136,7 +148,7 @@ Toda a UI é feita para um **usuário não-técnico** (dono do estabelecimento, 
 
 | Desculpa / Pensamento | Realidade |
 |---|---|
-| "Três cards de resumo ficam melhores lado a lado em `grid-cols-3` no desktop" | Proibido. A regra estrutural exige `flex flex-col` (um card embaixo do outro) tanto em telas grandes quanto pequenas. |
+| "Vou colocar o card de cadastro ao lado do card da tabela em duas colunas no desktop" | Proibido para itens de estrutura. Seções estruturais da tela ficam sempre em `flex flex-col` (uma embaixo da outra). Apenas cards de indicadores/badges de dados (como KPIs do Dashboard) e elementos internos não-estruturais têm formatação livre. |
 | "O `DESIGN.md` tem `40px` e `64px`, vou usar no título ou no valor do KPI" | Proibido. Valores gigantes estouram a harmonia do ERP; mantenha a escala proporcional (`20px-22px` título, `16px-18px` subtítulo/destaque). |
 | "São 5 ações pequenas, cabem em linha na tabela" | Mais de 4 ações exigem obrigatoriamente menu dropdown com ícones. Até 4 ações usam apenas ícone + tooltip obrigatório. |
 | "Já sei qual paginação escolher para essa tabela grande" | Se não foi definido entre paginação numerada ou scroll infinito, pergunte ao usuário qual prefere. |
@@ -147,7 +159,7 @@ Toda a UI é feita para um **usuário não-técnico** (dono do estabelecimento, 
 
 ## Red Flags (Lista de Verificação Rápida antes de Entregar)
 
-- [ ] A tela inteira mora dentro de um `Card` e todos os cards seguem `flex flex-col` (nenhum `grid-cols-*` colocando cards lado a lado)?
+- [ ] A tela inteira mora dentro de um `Card` e as seções estruturais seguem `flex flex-col` (deixando `grid`/`flex-row` livre apenas para cards de indicadores/badges de dados e conteúdos internos não-estruturais)?
 - [ ] As fontes estão proporcionais (sem `40px`/`54px`/`64px`) e mantendo hierarquia título > subtítulo > corpo?
 - [ ] Existe botão de ajuda **apenas com ícone** (inclusive no mobile) abrindo a **seção de ajuda** da tela?
 - [ ] Toda tela nova/pré-load roda assíncrona mostrando `"Carregando..."` com spinner, sem travar a abertura?

@@ -62,17 +62,10 @@ describe('Global Architectural Guardrails (palhetasoft-design, UI Reuse, Context
         combinedSource.includes('<Card'),
         `Missing structural Card wrapper on /${route}`
       ).toBe(true);
-    }
-  });
-
-  it('forbids side-by-side grid-cols-* layouts on screens (strictly flex-col stacked cards)', () => {
-    const appFiles = listFilesRecursive(path.resolve(process.cwd(), 'src/app'));
-    for (const file of appFiles) {
-      const content = fs.readFileSync(file, 'utf8');
       expect(
-        /grid-cols-/.test(content),
-        `Side-by-side grid-cols-* found in ${path.relative(process.cwd(), file)}; palhetasoft-design requires flex-col.`
-      ).toBe(false);
+        combinedSource.includes('flex-col'),
+        `Missing flex-col structural stacking on /${route}`
+      ).toBe(true);
     }
   });
 

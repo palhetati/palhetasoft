@@ -170,43 +170,61 @@ export function DashboardClient({
       {loading || !summary ? (
         <LoadingState label="Carregando..." />
       ) : (
-        <div className="flex flex-col gap-4">
-          {/* Cards empilhados em flex-col (zero grid lado a lado) */}
-          <Card
-            variant="featured-night"
-            title="Líquido Realizado (Caixa Real)"
-            helpTitle="O que é o Líquido Realizado"
-            helpText="Mostra o valor que efetivamente sobrou no período. Soma as vendas líquidas de taxas e desconta apenas as despesas fixas e variáveis já quitadas."
-          >
-            <p className="typo-heading-2 text-on-primary">{formatBRL(summary.realizedNetProfit)}</p>
-            <p className="typo-caption mt-1 text-on-primary/80">
-              Caixas abertos neste momento: {openRegistersCount}
-            </p>
-          </Card>
+        <div className="flex flex-col gap-5">
+          {/* Cards de indicadores/dados livres para grid responsivo; seções estruturais abaixo seguem em flex-col */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <Card
+              variant="featured-night"
+              title="Líquido Realizado (Caixa Real)"
+              helpTitle="O que é o Líquido Realizado"
+              helpText="Mostra o valor que efetivamente sobrou no período. Soma as vendas líquidas de taxas e desconta apenas as despesas fixas e variáveis já quitadas."
+            >
+              <p className="typo-heading-2 text-on-primary">
+                {formatBRL(summary.realizedNetProfit)}
+              </p>
+              <p className="typo-caption mt-1 text-on-primary/80">
+                Caixas abertos agora: {openRegistersCount}
+              </p>
+            </Card>
 
-          <Card
-            variant="soft"
-            title="Faturamento Bruto e Taxas"
-            subtitle={`Taxas descontadas no período: ${formatBRL(summary.totalFees)}`}
-          >
-            <p className="typo-heading-3 text-ink">{formatBRL(summary.grossRevenue)}</p>
-            <p className="typo-caption mt-1 text-ink-muted">
-              Receita líquida das vendas: {formatBRL(summary.netSalesRevenue)}
-            </p>
-          </Card>
+            <Card
+              variant="soft"
+              title="Faturamento Bruto e Taxas"
+              subtitle={`Taxas descontadas: ${formatBRL(summary.totalFees)}`}
+            >
+              <p className="typo-heading-3 text-ink">{formatBRL(summary.grossRevenue)}</p>
+              <p className="typo-caption mt-1 text-ink-muted">
+                Receita líquida: {formatBRL(summary.netSalesRevenue)}
+              </p>
+            </Card>
 
-          <Card
-            variant="soft"
-            title="Líquido Previsto do Período"
-            helpTitle="O que é o Líquido Previsto"
-            helpText="Projeta quanto sobrará após pagar todas as contas fixas e variáveis que ainda estão pendentes neste período."
-          >
-            <p className="typo-heading-3 text-ink">{formatBRL(summary.projectedNetProfit)}</p>
-            <p className="typo-caption mt-1 text-ink-muted">
-              Contas pendentes a pagar:{' '}
-              {formatBRL(summary.fixedExpensesPending + summary.variableExpensesPending)}
-            </p>
-          </Card>
+            <Card
+              variant="soft"
+              title="Líquido Previsto do Período"
+              helpTitle="O que é o Líquido Previsto"
+              helpText="Projeta quanto sobrará após pagar todas as contas fixas e variáveis que ainda estão pendentes neste período."
+            >
+              <p className="typo-heading-3 text-ink">{formatBRL(summary.projectedNetProfit)}</p>
+              <p className="typo-caption mt-1 text-ink-muted">
+                Contas pendentes:{' '}
+                {formatBRL(summary.fixedExpensesPending + summary.variableExpensesPending)}
+              </p>
+            </Card>
+
+            <Card
+              variant="soft"
+              title="Reserva Trabalhista (CLT)"
+              helpTitle="Para que serve esta reserva"
+              helpText="Indica quanto guardar no mês para décimo terceiro salário e férias com um terço, sem descontar duas vezes do seu caixa real."
+            >
+              <p className="typo-heading-3 text-ink">
+                {formatBRL(summary.accountingProvisionsTotal)}
+              </p>
+              <p className="typo-caption mt-1 text-ink-muted">
+                Provisão de 13º salário e férias
+              </p>
+            </Card>
+          </div>
 
           <Card
             variant="soft"
@@ -233,18 +251,6 @@ export function DashboardClient({
                 </span>
               </div>
             </div>
-          </Card>
-
-          <Card
-            variant="soft"
-            title="Reserva Trabalhista Recomendada (CLT)"
-            helpTitle="Para que serve esta reserva"
-            helpText="Indica quanto guardar no mês para décimo terceiro salário e férias com um terço, sem descontar duas vezes do seu caixa real."
-          >
-            <p className="typo-heading-3 text-ink">{formatBRL(summary.accountingProvisionsTotal)}</p>
-            <p className="typo-caption mt-1 text-ink-muted">
-              Provisão acumulada de décimo terceiro e férias
-            </p>
           </Card>
 
           <Card variant="flat" title="Últimas Vendas Registradas">
