@@ -2,7 +2,7 @@
 
 import React, { useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import { Select } from '@/components/ui';
+import { LoadingState, Select } from '@/components/ui';
 import { switchSuperAdminTenantAction } from '@/modules/auth/actions';
 
 export interface TenantSwitcherProps {
@@ -37,6 +37,11 @@ export function TenantSwitcher({
           label: est.name,
         }))}
       />
+      {isPending && (
+        <div className="mt-2">
+          <LoadingState compact label="Carregando..." />
+        </div>
+      )}
     </div>
   );
 }

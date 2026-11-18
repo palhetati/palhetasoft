@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import { useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronDown, LogOut } from 'lucide-react';
@@ -9,6 +10,16 @@ import type { NavigationNode, SessionNavSnapshot } from '@/modules/auth/types';
 import { signOutAction } from '@/modules/auth/actions';
 import { DynamicIcon } from './icon-resolver';
 import { TenantSwitcher } from './tenant-switcher';
+
+function SignOutSubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <Button type="submit" variant="utility" fullWidth loading={pending} loadingText="Saindo...">
+      <LogOut className="h-4 w-4" />
+      Sair da conta
+    </Button>
+  );
+}
 
 export interface SidebarNavProps {
   session: SessionNavSnapshot;
@@ -37,10 +48,10 @@ function NavTreeBranch({
       <Link
         href={node.routePath}
         onClick={onNavigate}
-        className={`flex min-h-[42px] items-center gap-3 rounded-sm px-3 py-2 typo-body-sm transition-colors ${
+        className={`flex min-h-[40px] items-center gap-3 rounded-sm px-3 py-2 typo-body-sm transition-all duration-200 ease-out ${
           active
             ? 'bg-canvas-soft font-semibold text-primary border-l-2 border-primary'
-            : 'text-ink-secondary hover:bg-canvas-soft'
+            : 'text-ink-secondary hover:bg-canvas-soft hover:translate-x-0.5'
         }`}
       >
         <DynamicIcon name={node.iconName} className="h-4 w-4 shrink-0" />
@@ -62,11 +73,15 @@ function NavTreeBranch({
           {node.label}
         </span>
         <ChevronDown
-          className={`h-3.5 w-3.5 text-ink-faint transition-transform ${expanded ? 'rotate-180' : ''}`}
+          className={`h-3.5 w-3.5 text-ink-faint transition-transform duration-200 ease-out ${expanded ? 'rotate-180' : ''}`}
         />
       </Button>
-      {expanded && (
-        <div className="ml-3 space-y-0.5 border-l border-hairline pl-2">
+      <div
+        className={`ml-3 overflow-hidden border-l border-hairline pl-2 transition-all duration-200 ease-out ${
+          expanded ? 'max-h-96 opacity-100' : 'max-h-0 opacity-0'
+        }`}
+      >
+        <div className="space-y-0.5 py-0.5">
           {node.children.map((child) => (
             <NavTreeBranch
               key={child.id}
@@ -76,7 +91,7 @@ function NavTreeBranch({
             />
           ))}
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -124,10 +139,7 @@ export function SidebarNav({ session, establishments, onNavigate }: SidebarNavPr
           <p className="typo-caption text-ink-faint truncate">{session.email}</p>
         </div>
         <form action={signOutAction}>
-          <Button type="submit" variant="utility" fullWidth>
-            <LogOut className="h-4 w-4" />
-            Sair da conta
-          </Button>
+          <SignOutSubmitButton />
         </form>
       </div>
     </div>

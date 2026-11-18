@@ -1,17 +1,17 @@
 import React from 'react';
-import { Alert, PageHeader } from '@/components/ui';
+import { Alert, Card, PageHeader } from '@/components/ui';
 
 export default function SemAcessoPage() {
   return (
-    <div>
+    <Card variant="flat" className="flex flex-col gap-5">
       <PageHeader
         title="Acesso Pendente"
         helpTitle="Por que estou vendo esta tela"
-        helpText="Sua conta foi autenticada com sucesso, porém ainda não há nenhum módulo ou perfil liberado para o seu usuário. Solicite ao administrador do estabelecimento a vinculação do seu perfil."
+        helpText="Sua conta foi autenticada com sucesso, porém ainda não há nenhum módulo liberado para o seu perfil. Solicite ao gestor a liberação das suas telas."
       />
-      <Alert tone="info" title="Nenhum módulo atribuído ao seu perfil">
-        Peça ao gestor da sua empresa para vincular um perfil de acesso à sua conta e depois saia e entre novamente no sistema.
+      <Alert tone="info" title="Nenhum menu liberado ainda">
+        Peça ao gestor do estabelecimento para atribuir um perfil à sua conta e entre novamente no sistema.
       </Alert>
-    </div>
+    </Card>
   );
 }

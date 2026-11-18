@@ -1,35 +1,47 @@
 import React from 'react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { Pencil, Trash2, Eye, Copy, Archive } from 'lucide-react';
 import {
   Accordion,
   Alert,
   Badge,
   Button,
   Card,
+  ConfirmModal,
   HelpHint,
   Input,
+  LoadingState,
   Modal,
   PageHeader,
   ResponsiveDataTable,
+  RowActions,
   Select,
+  Tooltip,
 } from '@/components/ui';
 
-describe('Centralized DESIGN.md Reusable UI Kit', () => {
-  it('applies pill radius on primary buttons and 8px radius on utility buttons with 44px touch targets', () => {
+describe('Centralized DESIGN.md + palhetasoft-design Reusable UI Kit', () => {
+  it('applies soft proportional sizing, touch scale animation, and loading spinner feedback on Buttons', () => {
     render(
       <div>
         <Button variant="primary">Salvar Venda</Button>
         <Button variant="utility">Filtrar</Button>
+        <Button variant="primary" loading loadingText="Salvando...">
+          Confirmar
+        </Button>
       </div>
     );
 
     const primary = screen.getByRole('button', { name: 'Salvar Venda' });
     const utility = screen.getByRole('button', { name: 'Filtrar' });
+    const loadingBtn = screen.getByRole('button', { name: 'Salvando...' });
 
     expect(primary.className).toContain('rounded-full');
-    expect(primary.className).toContain('min-h-[44px]');
+    expect(primary.className).toContain('min-h-[40px]');
+    expect(primary.className).toContain('active:scale-[0.98]');
     expect(utility.className).toContain('rounded-md');
+    expect(loadingBtn).toBeDisabled();
+    expect(loadingBtn).toHaveAttribute('aria-busy', 'true');
   });
 
   it('applies 4px radius on Input and Select controls with proper labels', () => {
@@ -51,7 +63,7 @@ describe('Centralized DESIGN.md Reusable UI Kit', () => {
     expect(screen.getByLabelText('Categoria')).toBeInTheDocument();
   });
 
-  it('renders HelpHint (?) in PageHeader and selective Cards, opening dash-free explanation on click', () => {
+  it('renders icon-only help button in PageHeader that expands the inline help section without dashes', () => {
     render(
       <div>
         <PageHeader
@@ -59,7 +71,11 @@ describe('Centralized DESIGN.md Reusable UI Kit', () => {
           helpTitle="Como gerenciar Despesas"
           helpText="Cadastre contas fixas — e variáveis."
         />
-        <Card title="Líquido Realizado" helpTitle="Entenda o Líquido" helpText="Soma vendas pagas descontando despesas quitadas.">
+        <Card
+          title="Líquido Realizado"
+          helpTitle="Entenda o Líquido"
+          helpText="Soma vendas pagas descontando despesas quitadas."
+        >
           <span>R$ 1.500,00</span>
         </Card>
         <Card title="Card Simples Sem Ajuda">
@@ -68,18 +84,75 @@ describe('Centralized DESIGN.md Reusable UI Kit', () => {
       </div>
     );
 
-    // 2 HelpHint buttons total (1 in PageHeader + 1 in strategic Card, NOT on simple Card)
     const helpButtons = screen.getAllByRole('button', { name: /Ajuda:/i });
     expect(helpButtons).toHaveLength(2);
+    // PageHeader help button is icon-only (no visible text label inside button)
+    expect(helpButtons[0]?.textContent?.trim()).toBe('');
+    expect(helpButtons[0]).toHaveAttribute('aria-expanded', 'false');
 
-    fireEvent.click(helpButtons[0]);
-    const dialogText = screen.getByText(/Cadastre contas fixas/i).textContent ?? '';
-    expect(dialogText).not.toMatch(/[—–]/);
+    fireEvent.click(helpButtons[0]!);
+    expect(helpButtons[0]).toHaveAttribute('aria-expanded', 'true');
+    const helpSectionText = screen.getByText(/Cadastre contas fixas/i).textContent ?? '';
+    expect(helpSectionText).not.toMatch(/[—–]/);
   });
 
-  it('renders ResponsiveDataTable rows, Badges, Accordion, Alert, and Modal', () => {
+  it('renders shared ConfirmModal with spinner feedback and inline error handling', () => {
+    const onConfirm = vi.fn();
+    const onClose = vi.fn();
+
+    render(
+      <ConfirmModal
+        open={true}
+        onClose={onClose}
+        onConfirm={onConfirm}
+        title="Excluir despesa?"
+        description="Esta conta será removida da listagem."
+        confirmLabel="Excluir"
+        loadingLabel="Excluindo..."
+        loading={true}
+        errorMessage="Falha temporária de conexão."
+      />
+    );
+
+    expect(screen.getByText('Excluir despesa?')).toBeInTheDocument();
+    expect(screen.getByText('Falha temporária de conexão.')).toBeInTheDocument();
+    const confirmBtn = screen.getByRole('button', { name: 'Excluindo...' });
+    expect(confirmBtn).toBeDisabled();
+  });
+
+  it('switches RowActions between icon+tooltip (<= 4 actions) and dropdown menu (> 4 actions)', () => {
+    const noop = vi.fn();
+    const twoActions = [
+      { key: 'edit', label: 'Editar item', icon: <Pencil className="h-4 w-4" />, onClick: noop },
+      { key: 'del', label: 'Excluir item', icon: <Trash2 className="h-4 w-4" />, onClick: noop },
+    ];
+    const fiveActions = [
+      ...twoActions,
+      { key: 'view', label: 'Visualizar', icon: <Eye className="h-4 w-4" />, onClick: noop },
+      { key: 'copy', label: 'Duplicar', icon: <Copy className="h-4 w-4" />, onClick: noop },
+      { key: 'arch', label: 'Arquivar', icon: <Archive className="h-4 w-4" />, onClick: noop },
+    ];
+
+    const { rerender } = render(<RowActions actions={twoActions} />);
+    expect(screen.getByRole('button', { name: 'Editar item' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Mais ações' })).not.toBeInTheDocument();
+
+    rerender(<RowActions actions={fiveActions} />);
+    const moreBtn = screen.getByRole('button', { name: 'Mais ações' });
+    fireEvent.click(moreBtn);
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByText('Arquivar')).toBeInTheDocument();
+  });
+
+  it('renders ResponsiveDataTable with horizontal scroll, truncation tooltip, pagination, LoadingState, Badges, Accordion, Alert, and Modal', () => {
+    const onPageChange = vi.fn();
+
     render(
       <div>
+        <LoadingState label="Carregando..." />
+        <Tooltip content="Dica rápida">
+          <span>Passe o mouse</span>
+        </Tooltip>
         <Badge sticker="green">Pago</Badge>
         <Alert tone="info" title="Caixa aberto">
           Turno em andamento.
@@ -89,11 +162,24 @@ describe('Centralized DESIGN.md Reusable UI Kit', () => {
         </Accordion>
         <ResponsiveDataTable
           keyExtractor={(item) => item.id}
-          data={[{ id: '1', item: 'Cerveja', valor: 'R$ 7,50' }]}
+          data={[
+            {
+              id: '1',
+              item: 'Porção Especial Completa de Tilápia com Acompanhamentos da Casa',
+              valor: 'R$ 79,90',
+            },
+          ]}
           columns={[
             { key: 'item', header: 'Produto', render: (r) => r.item },
             { key: 'valor', header: 'Preço', render: (r) => r.valor },
           ]}
+          pagination={{
+            mode: 'numbered',
+            page: 1,
+            pageSize: 1,
+            totalCount: 3,
+            onPageChange,
+          }}
         />
         <Modal open={true} onClose={() => {}} title="Confirmar Abertura">
           <p>Informe o fundo de troco</p>
@@ -102,11 +188,14 @@ describe('Centralized DESIGN.md Reusable UI Kit', () => {
       </div>
     );
 
+    expect(screen.getByText('Carregando...')).toBeInTheDocument();
     expect(screen.getByText('Pago')).toBeInTheDocument();
     expect(screen.getByText('Caixa aberto')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Ver detalhamento contábil CLT/i }));
     expect(screen.getByText('FGTS Mensal parametrizado')).toBeInTheDocument();
-    expect(screen.getAllByText('Cerveja').length).toBeGreaterThanOrEqual(1);
+    // Numbered pagination renders page 2 button
+    fireEvent.click(screen.getByRole('button', { name: '2' }));
+    expect(onPageChange).toHaveBeenCalledWith(2);
     expect(screen.getByText('Confirmar Abertura')).toBeInTheDocument();
   });
 });

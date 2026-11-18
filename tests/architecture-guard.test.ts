@@ -18,7 +18,7 @@ function listFilesRecursive(dir: string): string[] {
   return files;
 }
 
-describe('Global Architectural Guardrails (UI Reuse, Contextual Help, No Dashes, Parameterized CLT)', () => {
+describe('Global Architectural Guardrails (palhetasoft-design, UI Reuse, Contextual Help, No Dashes, Parameterized CLT)', () => {
   it('forbids raw <button>, <input>, <select>, or <textarea> tags outside src/components/ui', () => {
     const dirsToCheck = [
       path.resolve(process.cwd(), 'src/app'),
@@ -38,7 +38,7 @@ describe('Global Architectural Guardrails (UI Reuse, Contextual Help, No Dashes,
     }
   });
 
-  it('ensures every ERP module page renders PageHeader with contextual (?) help', () => {
+  it('ensures every ERP module route lives inside a Card and renders PageHeader with contextual (?) help', () => {
     const erpRoutes = [
       'dashboard',
       'pdv',
@@ -50,16 +50,45 @@ describe('Global Architectural Guardrails (UI Reuse, Contextual Help, No Dashes,
     ];
 
     for (const route of erpRoutes) {
-      const pagePath = path.resolve(process.cwd(), `src/app/(erp)/${route}/page.tsx`);
-      const content = fs.readFileSync(pagePath, 'utf8');
+      const routeDir = path.resolve(process.cwd(), `src/app/(erp)/${route}`);
+      const routeFiles = listFilesRecursive(routeDir);
+      const combinedSource = routeFiles.map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+
       expect(
-        content.includes('<PageHeader'),
+        combinedSource.includes('<PageHeader'),
         `Missing PageHeader (?) on /${route}`
+      ).toBe(true);
+      expect(
+        combinedSource.includes('<Card'),
+        `Missing structural Card wrapper on /${route}`
       ).toBe(true);
     }
   });
 
-  it('enforces zero em-dashes or en-dashes across all UI and page components', () => {
+  it('forbids side-by-side grid-cols-* layouts on screens (strictly flex-col stacked cards)', () => {
+    const appFiles = listFilesRecursive(path.resolve(process.cwd(), 'src/app'));
+    for (const file of appFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      expect(
+        /grid-cols-/.test(content),
+        `Side-by-side grid-cols-* found in ${path.relative(process.cwd(), file)}; palhetasoft-design requires flex-col.`
+      ).toBe(false);
+    }
+  });
+
+  it('forbids window.confirm, window.alert, and window.prompt across the entire codebase', () => {
+    const srcFiles = listFilesRecursive(path.resolve(process.cwd(), 'src'));
+    const nativeDialogRegex = /\bwindow\.(confirm|alert|prompt)\s*\(/;
+    for (const file of srcFiles) {
+      const content = fs.readFileSync(file, 'utf8');
+      expect(
+        nativeDialogRegex.test(content),
+        `Native browser dialog found in ${path.relative(process.cwd(), file)}; use shared ConfirmModal instead.`
+      ).toBe(false);
+    }
+  });
+
+  it('enforces zero em-dashes, en-dashes, or double-hyphen dashes across all UI and page components', () => {
     const uiFiles = [
       ...listFilesRecursive(path.resolve(process.cwd(), 'src/app')),
       ...listFilesRecursive(path.resolve(process.cwd(), 'src/components')),
